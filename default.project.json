@@ -14,7 +14,14 @@
     "StarterPlayer": {
       "StarterPlayerScripts": {
         "$path": "src/StarterPlayerScripts"
+      },
+      "StarterCharacterScripts": {
+        "$path": "src/StarterCharacterScripts"
       }
+    },
+
+    "StarterGui": {
+      "$path": "src/StarterGui"
     },
 
     "ServerStorage": {

@@ -1,0 +1,1 @@
+-- Empty script overrides Roblox's default Health script to disable HP regen.

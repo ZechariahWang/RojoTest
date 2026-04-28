@@ -4,6 +4,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage.Shared.Constants)
 local PlayerState = require(script.Parent.PlayerState)
 local InfectionSystem = require(script.Parent.InfectionSystem)
+local FireSpreadSystem = require(script.Parent.FireSpreadSystem)
 local MapManager = require(script.Parent.MapManager)
 
 local RoundManager = {}
@@ -11,6 +12,7 @@ local RoundManager = {}
 local currentPhase = Constants.PHASE_LOBBY
 local currentPhaseEndClock = 0
 local currentPhaseExtra: any = nil
+local currentStage = 0
 local RoundStateRemote: RemoteEvent
 
 local function broadcastPhase(phase: string, duration: number?, extra: any?)
@@ -97,6 +99,8 @@ end
 
 local function endRound(reason: string, winner: Player?)
 	InfectionSystem.stop()
+	FireSpreadSystem.stop()
+	currentStage = 0
 
 	for _, player in Players:GetPlayers() do
 		if player.Character then
@@ -117,6 +121,10 @@ local function endRound(reason: string, winner: Player?)
 	end
 
 	MapManager.unloadMap()
+end
+
+local function broadcastRoundStage(stage: number, remaining: number)
+	broadcastPhase(Constants.PHASE_ROUND, remaining, { stage = stage })
 end
 
 local function runRound()
@@ -142,12 +150,24 @@ local function runRound()
 	local roundStartSafeCount = #participants - 1
 
 	InfectionSystem.start()
-	broadcastPhase(Constants.PHASE_ROUND, Constants.ROUND_TIME)
+	FireSpreadSystem.start()
 
-	local roundEnd = os.clock() + Constants.ROUND_TIME
+	local roundStart = os.clock()
+	local roundEnd = roundStart + Constants.ROUND_TIME
+
+	currentStage = 1
+	broadcastRoundStage(1, Constants.ROUND_TIME)
 
 	while os.clock() < roundEnd do
 		task.wait(0.25)
+
+		local elapsed = os.clock() - roundStart
+		local nextStage = math.min(Constants.STAGE_COUNT, math.floor(elapsed / Constants.STAGE_DURATION) + 1)
+		if nextStage ~= currentStage then
+			currentStage = nextStage
+			FireSpreadSystem.setStage(currentStage)
+			broadcastRoundStage(currentStage, math.max(0, roundEnd - os.clock()))
+		end
 
 		local safeCount = PlayerState.countInState(Constants.STATE_SAFE)
 		local burningCount = PlayerState.countInState(Constants.STATE_BURNING)
@@ -213,13 +233,18 @@ local function gameLoop()
 	end
 end
 
-local function onPlayerInfected(safe: Player, _by: Player)
+local function onPlayerInfected(safe: Player, _by: any)
 	if currentPhase ~= Constants.PHASE_ROUND then return end
 	setBurning(safe, true)
 end
 
 local function onCharacterAdded(player: Player, char: Model)
 	char:WaitForChild("HumanoidRootPart", 5)
+
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum.BreakJointsOnDeath = false
+	end
 
 	syncPhaseTo(player)
 	PlayerState.syncTo(player)

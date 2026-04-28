@@ -6,11 +6,29 @@ Constants.INTERMISSION_TIME = 10
 Constants.ROUND_TIME = 90
 Constants.END_TIME = 5
 
+-- STAGES (within Round phase)
+Constants.STAGE_DURATION = 30
+Constants.STAGE_COUNT = 3
+
 -- INFECTION
 Constants.INFECTION_RADIUS = 8
-Constants.INFECTION_TIME = 0.6
-Constants.INFECTION_DECAY_RATE = 1.5
 Constants.NEW_BURNER_GRACE = 1.0
+
+-- DAMAGE
+Constants.BURNER_DAMAGE_PER_SEC = 10
+Constants.HAZARD_DAMAGE_PER_SEC = 5
+
+-- TRAIL (Stage 2+)
+Constants.TRAIL_DURATION = 5
+Constants.TRAIL_EMIT_INTERVAL = 0.25
+Constants.TRAIL_RADIUS = 4
+
+-- IGNITE (Stage 3)
+Constants.IGNITE_DURATION = 5
+Constants.IGNITE_RADIUS = 4
+
+-- TAGS
+Constants.TAG_FIREPROOF = "Fireproof"
 
 -- MOVEMENT
 Constants.SAFE_WALKSPEED = 16

@@ -8,17 +8,20 @@ local PlayerState = require(script.Parent.PlayerState)
 local InfectionSystem = {}
 
 local active = false
-local progress: { [Player]: number } = {}
 local burnerGrace: { [Player]: number } = {}
+local hazards: { [BasePart]: { radius: number } } = {}
 
-local InfectionProgressRemote: RemoteEvent
 local infectedEvent = Instance.new("BindableEvent")
 InfectionSystem.PlayerInfected = infectedEvent.Event
 
-local function isAlive(player: Player): boolean
+local function getHumanoid(player: Player): Humanoid?
 	local char = player.Character
-	if not char then return false end
-	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not char then return nil end
+	return char:FindFirstChildOfClass("Humanoid")
+end
+
+local function isAlive(player: Player): boolean
+	local hum = getHumanoid(player)
 	return hum ~= nil and hum.Health > 0
 end
 
@@ -48,37 +51,43 @@ local function step(dt: number)
 		end
 	end
 
-	local radius = Constants.INFECTION_RADIUS
-
 	for _, safe in safes do
 		local safeRoot = getRoot(safe)
 		if not safeRoot then continue end
+		local hum = getHumanoid(safe)
+		if not hum then continue end
 
-		local exposingBurner: Player? = nil
+		local rate = 0
+		local source: any = nil
+
 		for _, burner in burners do
 			local burnerRoot = getRoot(burner)
-			if burnerRoot and (burnerRoot.Position - safeRoot.Position).Magnitude <= radius then
-				exposingBurner = burner
+			if burnerRoot and (burnerRoot.Position - safeRoot.Position).Magnitude <= Constants.INFECTION_RADIUS then
+				rate = Constants.BURNER_DAMAGE_PER_SEC
+				source = burner
 				break
 			end
 		end
 
-		local current = progress[safe] or 0
-		if exposingBurner then
-			current += dt / Constants.INFECTION_TIME
-			if current >= 1 then
-				progress[safe] = nil
-				InfectionProgressRemote:FireClient(safe, 0)
-				infectedEvent:Fire(safe, exposingBurner)
-				continue
+		if rate == 0 then
+			for part, info in hazards do
+				if part.Parent and (part.Position - safeRoot.Position).Magnitude <= info.radius then
+					rate = Constants.HAZARD_DAMAGE_PER_SEC
+					source = part
+					break
+				end
 			end
-		else
-			current -= dt * Constants.INFECTION_DECAY_RATE / Constants.INFECTION_TIME
-			if current < 0 then current = 0 end
 		end
 
-		progress[safe] = current
-		InfectionProgressRemote:FireClient(safe, math.clamp(current, 0, 1))
+		if rate > 0 then
+			local newHealth = hum.Health - rate * dt
+			if newHealth <= 0 then
+				hum.Health = hum.MaxHealth
+				infectedEvent:Fire(safe, source)
+			else
+				hum.Health = newHealth
+			end
+		end
 	end
 end
 
@@ -90,30 +99,30 @@ function InfectionSystem.markBurner(player: Player, withGrace: boolean)
 	end
 end
 
+function InfectionSystem.registerHazard(part: BasePart, radius: number)
+	hazards[part] = { radius = radius }
+end
+
+function InfectionSystem.unregisterHazard(part: BasePart)
+	hazards[part] = nil
+end
+
 function InfectionSystem.start()
 	active = true
-	table.clear(progress)
 	table.clear(burnerGrace)
+	table.clear(hazards)
 end
 
 function InfectionSystem.stop()
 	active = false
-	for player in progress do
-		if player.Parent then
-			InfectionProgressRemote:FireClient(player, 0)
-		end
-	end
-	table.clear(progress)
 	table.clear(burnerGrace)
+	table.clear(hazards)
 end
 
 function InfectionSystem.init()
-	InfectionProgressRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("InfectionProgress") :: RemoteEvent
-
 	RunService.Heartbeat:Connect(step)
 
 	Players.PlayerRemoving:Connect(function(player)
-		progress[player] = nil
 		burnerGrace[player] = nil
 	end)
 end

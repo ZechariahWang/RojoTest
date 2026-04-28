@@ -15,8 +15,14 @@ local lastText = ""
 local currentPhase = Constants.PHASE_LOBBY
 local phaseEndTime = 0
 local endExtra: any = nil
-local infectionProgress = 0
+local currentStage = 0
 local playerStates: { [Player]: string } = {}
+
+local STAGE_DESCRIPTIONS = {
+	[1] = "Stay clear of the burned",
+	[2] = "They leave fire trails!",
+	[3] = "Anything they touch ignites!",
+}
 
 local function countByState(state: string): number
 	local count = 0
@@ -58,12 +64,17 @@ local function buildStatusText(): string
 		table.insert(lines, "BURN RUSH" .. timerText)
 		table.insert(lines, string.format("Safe: %d  |  Burning: %d", safeCount, burningCount))
 
+		if currentStage > 0 then
+			table.insert(lines, string.format("STAGE %d/%d", currentStage, Constants.STAGE_COUNT))
+			local desc = STAGE_DESCRIPTIONS[currentStage]
+			if desc then
+				table.insert(lines, desc)
+			end
+		end
+
 		local myState = playerStates[localPlayer]
 		if myState == Constants.STATE_SAFE then
 			table.insert(lines, "You are SAFE — press Q to dash")
-			if infectionProgress > 0.05 then
-				table.insert(lines, string.format("INFECTION: %d%%", math.floor(infectionProgress * 100)))
-			end
 		elseif myState == Constants.STATE_BURNING then
 			table.insert(lines, "You are BURNING — chase them!")
 		end
@@ -116,23 +127,20 @@ function UIController.init()
 	local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local RoundStateRemote = Remotes:WaitForChild("RoundStateChanged") :: RemoteEvent
 	local PlayerStateRemote = Remotes:WaitForChild("PlayerStateChanged") :: RemoteEvent
-	local InfectionProgressRemote = Remotes:WaitForChild("InfectionProgress") :: RemoteEvent
 
 	RoundStateRemote.OnClientEvent:Connect(function(phase: string, duration: number?, extra: any?)
 		currentPhase = phase
 		phaseEndTime = if duration then os.time() + duration else 0
 		endExtra = extra
-		if phase ~= Constants.PHASE_ROUND then
-			infectionProgress = 0
+		if phase == Constants.PHASE_ROUND and typeof(extra) == "table" and extra.stage then
+			currentStage = extra.stage
+		elseif phase ~= Constants.PHASE_ROUND then
+			currentStage = 0
 		end
 	end)
 
 	PlayerStateRemote.OnClientEvent:Connect(function(player: Player, state: string)
 		playerStates[player] = state
-	end)
-
-	InfectionProgressRemote.OnClientEvent:Connect(function(progress: number)
-		infectionProgress = progress
 	end)
 
 	Players.PlayerRemoving:Connect(function(player)

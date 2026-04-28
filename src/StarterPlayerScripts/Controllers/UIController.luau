@@ -10,7 +10,9 @@ local localPlayer = Players.LocalPlayer
 local playerGui: PlayerGui
 
 local statusLabel: TextLabel?
-local lastText = ""
+local secondaryLabel: TextLabel?
+local lastMainText = ""
+local lastSecondaryText = ""
 
 local currentPhase = Constants.PHASE_LOBBY
 local phaseEndTime = 0
@@ -18,11 +20,34 @@ local endExtra: any = nil
 local currentStage = 0
 local playerStates: { [Player]: string } = {}
 
-local STAGE_DESCRIPTIONS = {
-	[1] = "Stay clear of the burned",
-	[2] = "They leave fire trails!",
-	[3] = "Anything they touch ignites!",
+local WHITE = Color3.fromRGB(240, 240, 240)
+local YELLOW = Color3.fromRGB(255, 220, 80)
+local ORANGE = Color3.fromRGB(255, 150, 40)
+local RED = Color3.fromRGB(255, 80, 60)
+local GREEN = Color3.fromRGB(80, 220, 80)
+local CYAN = Color3.fromRGB(120, 220, 255)
+
+local STAGE_COLORS: { [number]: Color3 } = {
+	[1] = YELLOW,
+	[2] = ORANGE,
+	[3] = RED,
 }
+
+local STAGE_DESCRIPTIONS: { [number]: string } = {
+	[1] = "TAG",
+	[2] = "TRAILS",
+	[3] = "INFERNO",
+}
+
+local function colorize(color: Color3, text: string): string
+	return string.format(
+		"<font color=\"rgb(%d,%d,%d)\">%s</font>",
+		math.floor(color.R * 255 + 0.5),
+		math.floor(color.G * 255 + 0.5),
+		math.floor(color.B * 255 + 0.5),
+		text
+	)
+end
 
 local function countByState(state: string): number
 	local count = 0
@@ -41,83 +66,103 @@ local function formatTime(seconds: number): string
 	return string.format("%d:%02d", m, s)
 end
 
-local function buildStatusText(): string
-	local lines: { string } = {}
-
+local function buildMainText(): string
 	if currentPhase == Constants.PHASE_LOBBY then
-		local lobbyCount = countByState(Constants.STATE_LOBBY)
-		table.insert(lines, "Waiting for players...")
-		table.insert(lines, string.format("Players: %d / %d", lobbyCount, Constants.MIN_PLAYERS))
+		return colorize(WHITE, "WAITING FOR PLAYERS...")
 	elseif currentPhase == Constants.PHASE_INTERMISSION then
-		table.insert(lines, "Get ready!")
-		if phaseEndTime > 0 then
-			local remaining = math.max(0, phaseEndTime - os.time())
-			table.insert(lines, string.format("Starting in %ds", math.ceil(remaining)))
-		end
+		return colorize(YELLOW, "GET READY!")
 	elseif currentPhase == Constants.PHASE_ROUND then
-		local safeCount = countByState(Constants.STATE_SAFE)
-		local burningCount = countByState(Constants.STATE_BURNING)
-		local timerText = ""
-		if phaseEndTime > 0 then
-			timerText = " — " .. formatTime(phaseEndTime - os.time())
-		end
-		table.insert(lines, "BURN RUSH" .. timerText)
-		table.insert(lines, string.format("Safe: %d  |  Burning: %d", safeCount, burningCount))
-
 		if currentStage > 0 then
-			table.insert(lines, string.format("STAGE %d/%d", currentStage, Constants.STAGE_COUNT))
-			local desc = STAGE_DESCRIPTIONS[currentStage]
-			if desc then
-				table.insert(lines, desc)
-			end
+			local stageColor = STAGE_COLORS[currentStage] or WHITE
+			local desc = STAGE_DESCRIPTIONS[currentStage] or ""
+			return colorize(stageColor, string.format("STAGE %d/%d — %s", currentStage, Constants.STAGE_COUNT, desc))
 		end
-
-		local myState = playerStates[localPlayer]
-		if myState == Constants.STATE_SAFE then
-			table.insert(lines, "You are SAFE — press Q to dash")
-		elseif myState == Constants.STATE_BURNING then
-			table.insert(lines, "You are BURNING — chase them!")
-		end
+		return colorize(WHITE, "BURN RUSH")
 	elseif currentPhase == Constants.PHASE_END then
 		if endExtra and endExtra.winner then
-			table.insert(lines, endExtra.winner .. " survived!")
+			return colorize(GREEN, string.upper(endExtra.winner) .. " SURVIVED!")
 		elseif endExtra and endExtra.reason == Constants.REASON_ALL_INFECTED then
-			table.insert(lines, "Everyone burned!")
+			return colorize(RED, "EVERYONE BURNED!")
 		else
-			table.insert(lines, "Round ended")
+			return colorize(WHITE, "ROUND ENDED")
 		end
 	end
-
-	return table.concat(lines, "\n")
+	return ""
 end
 
-local function resolveStatusLabel(): TextLabel?
-	if statusLabel and statusLabel.Parent then
-		return statusLabel
+local function buildSecondaryText(): string
+	if currentPhase == Constants.PHASE_LOBBY then
+		local lobbyCount = countByState(Constants.STATE_LOBBY)
+		return colorize(WHITE, string.format("Players: %d / %d", lobbyCount, Constants.MIN_PLAYERS))
+	elseif currentPhase == Constants.PHASE_INTERMISSION then
+		if phaseEndTime > 0 then
+			local remaining = math.max(0, phaseEndTime - os.time())
+			local color = if remaining <= 3 then RED else WHITE
+			return colorize(color, string.format("Starting in %ds", math.ceil(remaining)))
+		end
+		return ""
+	elseif currentPhase == Constants.PHASE_ROUND then
+		local parts: { string } = {}
+		if phaseEndTime > 0 then
+			local remaining = phaseEndTime - os.time()
+			local color = if remaining <= 30 then RED else WHITE
+			table.insert(parts, colorize(color, formatTime(remaining)))
+		end
+		local safeCount = countByState(Constants.STATE_SAFE)
+		local totalCount = safeCount + countByState(Constants.STATE_BURNING)
+		table.insert(parts, colorize(WHITE, string.format("%d/%d", safeCount, totalCount-1))) -- dont include sekf
+		return table.concat(parts, "  |  ")
+	elseif currentPhase == Constants.PHASE_END then
+		return ""
+	end
+	return ""
+end
+
+local function resolveLabel(frameName: string, labelName: string, cached: TextLabel?): TextLabel?
+	if cached and cached.Parent then
+		return cached
 	end
 
 	local gameGui = playerGui:FindFirstChild("Game")
 	if not gameGui then return nil end
-	local frame = gameGui:FindFirstChild("StatusFrame")
+	local frame = gameGui:FindFirstChild(frameName)
 	if not frame then return nil end
-	local label = frame:FindFirstChild("Status")
+	local label = frame:FindFirstChild(labelName)
 	if not label or not label:IsA("TextLabel") then return nil end
 
-	if label ~= statusLabel then
-		lastText = "" -- force a write to the freshly-replicated label
+	if not label.RichText then
+		label.RichText = true
 	end
-	statusLabel = label
-	return statusLabel
+	return label
 end
 
 local function updateLoop()
-	local label = resolveStatusLabel()
-	if not label then return end
+	local newStatus = resolveLabel("StatusFrame", "Status", statusLabel)
+	if newStatus ~= statusLabel then
+		statusLabel = newStatus
+		lastMainText = ""
+	end
 
-	local text = buildStatusText()
-	if text ~= lastText then
-		label.Text = text
-		lastText = text
+	local newSecondary = resolveLabel("SecondaryStatus", "Secondary", secondaryLabel)
+	if newSecondary ~= secondaryLabel then
+		secondaryLabel = newSecondary
+		lastSecondaryText = ""
+	end
+
+	if statusLabel then
+		local text = buildMainText()
+		if text ~= lastMainText then
+			statusLabel.Text = text
+			lastMainText = text
+		end
+	end
+
+	if secondaryLabel then
+		local text = buildSecondaryText()
+		if text ~= lastSecondaryText then
+			secondaryLabel.Text = text
+			lastSecondaryText = text
+		end
 	end
 end
 

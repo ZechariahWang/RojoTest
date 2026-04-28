@@ -3,11 +3,15 @@ local ServerStorage = game:GetService("ServerStorage")
 
 local MapManager = {}
 
+local LOADED_MAP_FOLDER_NAME = "LoadedMap"
+
 local currentMap: Model? = nil
 local lobbySpawn: SpawnLocation? = nil
 
 local function findLobbySpawn(): SpawnLocation?
-	for _, child in Workspace.Lobby:GetChildren() do
+	local lobby = Workspace:FindFirstChild("Lobby")
+	if not lobby then return nil end
+	for _, child in lobby:GetChildren() do
 		if child:IsA("SpawnLocation") then
 			return child
 		end
@@ -15,9 +19,21 @@ local function findLobbySpawn(): SpawnLocation?
 	return nil
 end
 
+local function getLoadedMapFolder(): Folder
+	local existing = Workspace:FindFirstChild(LOADED_MAP_FOLDER_NAME)
+	if existing and existing:IsA("Folder") then
+		return existing
+	end
+	if existing then existing:Destroy() end
+	local folder = Instance.new("Folder")
+	folder.Name = LOADED_MAP_FOLDER_NAME
+	folder.Parent = Workspace
+	return folder
+end
+
 local function getCurrentSpawnPoints(): { BasePart }
 	local result = {}
-	if not currentMap then return result end
+	if not currentMap or not currentMap.Parent then return result end
 	local folder = currentMap:FindFirstChild("SpawnPoints")
 	if not folder then return result end
 	for _, child in folder:GetChildren() do
@@ -59,20 +75,21 @@ function MapManager.loadRandomMap(): boolean
 
 	local picked = maps[math.random(1, #maps)]
 	local clone = picked:Clone()
-	clone.Parent = Workspace
+	clone.Parent = getLoadedMapFolder()
 	currentMap = clone
 	return true
 end
 
 function MapManager.unloadMap()
-	if currentMap then
-		currentMap:Destroy()
-		currentMap = nil
+	currentMap = nil
+	local folder = Workspace:FindFirstChild(LOADED_MAP_FOLDER_NAME)
+	if folder then
+		folder:Destroy()
 	end
 end
 
 function MapManager.hasMap(): boolean
-	return currentMap ~= nil
+	return currentMap ~= nil and currentMap.Parent ~= nil
 end
 
 function MapManager.teleportToArena(player: Player)
@@ -98,9 +115,31 @@ function MapManager.teleportToLobby(player: Player)
 end
 
 function MapManager.init()
+	-- Clear any stale map folder from a previous server session before maps load.
+	local stale = Workspace:FindFirstChild(LOADED_MAP_FOLDER_NAME)
+	if stale then
+		stale:Destroy()
+	end
+
 	lobbySpawn = findLobbySpawn()
 	if not lobbySpawn then
-		warn("MapManager: no SpawnLocation found in Workspace at startup")
+		warn("MapManager: no SpawnLocation found in Workspace.Lobby — players may not spawn correctly")
+	end
+
+	local mapsFolder = ServerStorage:FindFirstChild("Maps")
+	if not mapsFolder then
+		warn("MapManager: ServerStorage.Maps folder is missing — rounds cannot start. Create a Folder named 'Maps' in ServerStorage and place at least one Model inside it.")
+		return
+	end
+
+	local mapCount = 0
+	for _, child in mapsFolder:GetChildren() do
+		if child:IsA("Model") then
+			mapCount += 1
+		end
+	end
+	if mapCount == 0 then
+		warn("MapManager: ServerStorage.Maps contains no Models — rounds cannot start. Add at least one Model to that folder.")
 	end
 end
 

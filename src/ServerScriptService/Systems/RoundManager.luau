@@ -14,6 +14,7 @@ local currentPhaseEndClock = 0
 local currentPhaseExtra: any = nil
 local currentStage = 0
 local RoundStateRemote: RemoteEvent
+local KillFeedRemote: RemoteEvent
 
 local function broadcastPhase(phase: string, duration: number?, extra: any?)
 	currentPhase = phase
@@ -73,23 +74,48 @@ local function applyFire(player: Player, on: boolean)
 	fire.Parent = target
 end
 
+local function applyOutline(player: Player, on: boolean)
+	local char = player.Character
+	if not char then return end
+
+	local existing = char:FindFirstChild("BurnOutline")
+	if existing then
+		existing:Destroy()
+	end
+
+	if not on then return end
+
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "BurnOutline"
+	highlight.FillColor = Color3.fromRGB(255, 130, 0)
+	highlight.FillTransparency = 1
+	highlight.OutlineColor = Color3.fromRGB(255, 130, 0)
+	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Adornee = char
+	highlight.Parent = char
+end
+
 local function setBurning(player: Player, withGrace: boolean)
 	PlayerState.set(player, Constants.STATE_BURNING)
 	InfectionSystem.markBurner(player, withGrace)
 	setWalkSpeed(player, Constants.BURNING_WALKSPEED)
 	applyFire(player, true)
+	applyOutline(player, true)
 end
 
 local function setSafe(player: Player)
 	PlayerState.set(player, Constants.STATE_SAFE)
 	setWalkSpeed(player, Constants.SAFE_WALKSPEED)
 	applyFire(player, false)
+	applyOutline(player, false)
 end
 
 local function setLobby(player: Player)
 	PlayerState.set(player, Constants.STATE_LOBBY)
 	setWalkSpeed(player, Constants.SAFE_WALKSPEED)
 	applyFire(player, false)
+	applyOutline(player, false)
 end
 
 local function pickRandom(list: { Player }): Player?
@@ -106,7 +132,11 @@ local function endRound(reason: string, winner: Player?)
 		if player.Character then
 			applyFire(player, false)
 		end
+		setLobby(player)
+		MapManager.teleportToLobby(player)
 	end
+
+	MapManager.unloadMap()
 
 	broadcastPhase(Constants.PHASE_END, Constants.END_TIME, {
 		winner = winner and winner.Name or nil,
@@ -114,13 +144,6 @@ local function endRound(reason: string, winner: Player?)
 	})
 
 	task.wait(Constants.END_TIME)
-
-	for _, player in Players:GetPlayers() do
-		setLobby(player)
-		MapManager.teleportToLobby(player)
-	end
-
-	MapManager.unloadMap()
 end
 
 local function broadcastRoundStage(stage: number, remaining: number)
@@ -212,17 +235,15 @@ local function gameLoop()
 			task.wait(1)
 		end
 
-		broadcastPhase(Constants.PHASE_INTERMISSION, Constants.INTERMISSION_TIME)
-
 		local mapLoaded = MapManager.loadRandomMap()
-
-		task.wait(Constants.INTERMISSION_TIME)
-
 		if not mapLoaded then
-			warn("RoundManager: map load failed, returning to lobby")
-			task.wait(2)
+			warn("RoundManager: cannot start round — map load failed. Add at least one Model to ServerStorage.Maps.")
+			task.wait(5)
 			continue
 		end
+
+		broadcastPhase(Constants.PHASE_INTERMISSION, Constants.INTERMISSION_TIME)
+		task.wait(Constants.INTERMISSION_TIME)
 
 		if PlayerState.countInState(Constants.STATE_LOBBY) < Constants.MIN_PLAYERS then
 			MapManager.unloadMap()
@@ -233,8 +254,15 @@ local function gameLoop()
 	end
 end
 
-local function onPlayerInfected(safe: Player, _by: any)
+local function onPlayerInfected(safe: Player, by: any)
 	if currentPhase ~= Constants.PHASE_ROUND then return end
+
+	local killerName: string? = nil
+	if typeof(by) == "Instance" and by:IsA("Player") then
+		killerName = by.Name
+	end
+	KillFeedRemote:FireAllClients(killerName, safe.Name)
+
 	setBurning(safe, true)
 end
 
@@ -278,7 +306,17 @@ local function bindPlayer(player: Player)
 end
 
 function RoundManager.init()
-	RoundStateRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("RoundStateChanged") :: RemoteEvent
+	local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+	RoundStateRemote = Remotes:WaitForChild("RoundStateChanged") :: RemoteEvent
+
+	local existingKillFeed = Remotes:FindFirstChild("KillFeed")
+	if existingKillFeed and existingKillFeed:IsA("RemoteEvent") then
+		KillFeedRemote = existingKillFeed
+	else
+		KillFeedRemote = Instance.new("RemoteEvent")
+		KillFeedRemote.Name = "KillFeed"
+		KillFeedRemote.Parent = Remotes
+	end
 
 	InfectionSystem.PlayerInfected:Connect(onPlayerInfected)
 

@@ -237,7 +237,7 @@ local function gameLoop()
 
 		local mapLoaded = MapManager.loadRandomMap()
 		if not mapLoaded then
-			warn("RoundManager: cannot start round — map load failed. Add at least one Model to ServerStorage.Maps.")
+			warn("RoundManager: yo add the maps back to server storage")
 			task.wait(5)
 			continue
 		end

@@ -123,10 +123,23 @@ local function pickRandom(list: { Player }): Player?
 	return list[math.random(1, #list)]
 end
 
-local function endRound(reason: string, winner: Player?)
+local function healAllPlayers()
+	for _, player in Players:GetPlayers() do
+		local char = player.Character
+		if not char then continue end
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum.Health = hum.MaxHealth
+		end
+	end
+end
+
+local function endRound(reason: string, winners: { string })
 	InfectionSystem.stop()
 	FireSpreadSystem.stop()
 	currentStage = 0
+
+	healAllPlayers()
 
 	for _, player in Players:GetPlayers() do
 		if player.Character then
@@ -139,7 +152,7 @@ local function endRound(reason: string, winner: Player?)
 	MapManager.unloadMap()
 
 	broadcastPhase(Constants.PHASE_END, Constants.END_TIME, {
-		winner = winner and winner.Name or nil,
+		winners = winners,
 		reason = reason,
 	})
 
@@ -148,6 +161,14 @@ end
 
 local function broadcastRoundStage(stage: number, remaining: number)
 	broadcastPhase(Constants.PHASE_ROUND, remaining, { stage = stage })
+end
+
+local function survivorNames(): { string }
+	local names: { string } = {}
+	for _, p in PlayerState.getAllInState(Constants.STATE_SAFE) do
+		table.insert(names, p.Name)
+	end
+	return names
 end
 
 local function runRound()
@@ -166,11 +187,25 @@ local function runRound()
 	end
 
 	local initialBurner = pickRandom(participants)
-	if initialBurner then
-		setBurning(initialBurner, false)
+	if not initialBurner then
+		broadcastPhase(Constants.PHASE_LOBBY)
+		return
 	end
+	setBurning(initialBurner, false)
 
-	local roundStartSafeCount = #participants - 1
+	-- Reveal phase: burner is visible (fire + outline), but InfectionSystem and
+	-- FireSpreadSystem are NOT running yet, so no damage. Everyone gets to position.
+	broadcastPhase(Constants.PHASE_REVEAL, Constants.REVEAL_TIME, {
+		burner = initialBurner.Name,
+	})
+	task.wait(Constants.REVEAL_TIME)
+
+	local burningStill = PlayerState.countInState(Constants.STATE_BURNING)
+	local safeStill = PlayerState.countInState(Constants.STATE_SAFE)
+	if safeStill + burningStill < Constants.MIN_PLAYERS then
+		endRound(Constants.REASON_ABORTED, {})
+		return
+	end
 
 	InfectionSystem.start()
 	FireSpreadSystem.start()
@@ -196,34 +231,25 @@ local function runRound()
 		local burningCount = PlayerState.countInState(Constants.STATE_BURNING)
 
 		if safeCount + burningCount < Constants.MIN_PLAYERS then
-			endRound(Constants.REASON_ABORTED, nil)
+			endRound(Constants.REASON_ABORTED, {})
 			return
 		end
 
 		if safeCount == 0 then
-			endRound(Constants.REASON_ALL_INFECTED, nil)
+			endRound(Constants.REASON_ALL_INFECTED, {})
 			return
 		end
 
-		if burningCount == 0 then
-			local survivors = PlayerState.getAllInState(Constants.STATE_SAFE)
-			endRound(Constants.REASON_SURVIVED, survivors[1])
-			return
-		end
-
-		if safeCount == 1 and roundStartSafeCount > 1 then
-			local survivors = PlayerState.getAllInState(Constants.STATE_SAFE)
-			endRound(Constants.REASON_SURVIVED, survivors[1])
-			return
-		end
+		-- No early termination on a single remaining survivor — round runs to the timer
+		-- so they can keep trying to outlast the clock.
 	end
 
-	-- Time up
-	local survivors = PlayerState.getAllInState(Constants.STATE_SAFE)
-	if #survivors > 0 then
-		endRound(Constants.REASON_SURVIVED, survivors[1])
+	-- Time up — every safe player is a winner.
+	local winners = survivorNames()
+	if #winners > 0 then
+		endRound(Constants.REASON_SURVIVED, winners)
 	else
-		endRound(Constants.REASON_ALL_INFECTED, nil)
+		endRound(Constants.REASON_ALL_INFECTED, {})
 	end
 end
 

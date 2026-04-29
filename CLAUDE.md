@@ -20,7 +20,7 @@ A round-based Roblox tag-style game. One player starts "burning" and converts ot
 - `Systems/PlayerState.luau` — per-player state (`Lobby` / `Safe` / `Burning`). Replicates via `PlayerStateChanged` RemoteEvent. Exposes `StateChanged` BindableEvent.
 - `Systems/RoundManager.luau` — game loop and round lifecycle. Owns the phase state machine, the 3-stage in-round progression, character setup (regen disable via `BreakJointsOnDeath = false`), per-burner Fire/Highlight visuals, and the kill-feed broadcast.
 - `Systems/InfectionSystem.luau` — damage-over-time engine. Iterates safe players each Heartbeat, applies damage from any in-range burner or registered hazard. When HP hits 0, fires `PlayerInfected` and restores HP (no actual death).
-- `Systems/FireSpreadSystem.luau` — owns Stage 2 fire trails and Stage 3 touch-ignition. Per-burner `ParticleEmitter` for visuals; invisible hazard parts for damage hitboxes.
+- `Systems/FireSpreadSystem.luau` — owns Stage 2 fire-wall trails and Stage 3 touch-ignition. Wall segments are visible Neon parts with flame `ParticleEmitter`s — they double as the visual and the damage hitbox.
 - `Systems/MapManager.luau` — clones map from `ServerStorage.Maps` into `Workspace.LoadedMap`, manages spawn points and lobby teleport. Warns at `init()` if `ServerStorage.Maps` is missing or empty.
 - `Systems/AbilitySystem.luau` — dash mechanic for safe players (Q key).
 
@@ -44,7 +44,7 @@ A round-based Roblox tag-style game. One player starts "burning" and converts ot
 
 The `Remotes` folder lives in Studio (not Rojo source); it is preserved across syncs because `ReplicatedStorage` has `ignoreUnknownInstances: true`.
 
-- `RoundStateChanged` (RemoteEvent) — server broadcasts `(phase, duration?, extra?)`. During `Round`, `extra` is `{ stage = 1|2|3 }`. At `End`, `extra` is `{ winner, reason }`.
+- `RoundStateChanged` (RemoteEvent) — server broadcasts `(phase, duration?, extra?)`. During `Reveal`, `extra` is `{ burner = name }`. During `Round`, `extra` is `{ stage = 1|2|3 }`. At `End`, `extra` is `{ winners = { name, ... }, reason }` — `winners` may be empty (everyone burned / aborted).
 - `PlayerStateChanged` (RemoteEvent) — server broadcasts `(player, state)`.
 - `DashRequest` (RemoteEvent) — client → server.
 - `KillFeed` (RemoteEvent) — server broadcasts `(killerName?, victimName)` per conversion. **Auto-created** by `RoundManager.init()` if not already present.
@@ -52,26 +52,30 @@ The `Remotes` folder lives in Studio (not Rojo source); it is preserved across s
 
 ### GUI structure (`PlayerGui.Game`, a ScreenGui authored in Studio)
 
-- `StatusFrame.Status` (TextLabel) — main HUD line. Stage info during round, "GET READY!" / winner banner otherwise. RichText, all uppercase.
+- `StatusFrame.Status` (TextLabel) — main HUD line. Stage info during round, "GET READY!" during intermission, `"<NAME> IS BURNING!"` during reveal, winner banner at end (1 / 2 / `N PLAYERS` formats). RichText, all uppercase.
 - `SecondaryStatus.Secondary` (TextLabel) — secondary HUD line. Timer + `safe/total` alive count joined by ` | `.
 - `Killfeed` (Frame) — kill feed entries are parented here.
 - `ID_Objects.KillData` (TextLabel) — template cloned per kill into `Killfeed`. Hidden by default; `Visible = true` set on the clone.
 
 ## Round Flow
 
-`Lobby → Intermission (10s) → Round (90s, 3 × 30s stages) → End (5s) → Lobby`
+`Lobby → Intermission (10s) → Reveal (6s) → Round (90s, 3 × 30s stages) → End (5s) → Lobby`
 
 `gameLoop` loads the map **before** broadcasting `Intermission`. If the map fails to load (no `ServerStorage.Maps`, or it's empty), it warns and stays in the `Lobby` phase instead of getting stuck cycling through intermission.
 
-`endRound` order is important: stop systems → teleport everyone to lobby → unload map → THEN broadcast `End` and wait `END_TIME`. The map disappears the instant the round ends; players watch the announcement from the lobby.
+**Reveal phase** is a no-damage grace window between teleport-to-arena and the actual round. The initial burner has been chosen and gets the visible fire + outline so everyone can see who they are; safe players use the time to position themselves. `InfectionSystem` and `FireSpreadSystem` are deliberately NOT started until reveal ends, so no damage, walls, or ignition can happen during it.
+
+`endRound` order is important: stop systems → **heal everyone to MaxHealth** → teleport everyone to lobby → unload map → THEN broadcast `End` and wait `END_TIME`. The map disappears the instant the round ends; players watch the announcement from the lobby with full HP.
+
+The round does **not** end early when only one safe player remains — the timer must run out. A round only ends early if (a) every safe player is converted (`AllInfected`), or (b) the player count drops below `MIN_PLAYERS` (`Aborted`). When the timer runs out, **every** remaining safe player is a winner.
 
 ### Stages (within Round phase)
 
 | Stage | Duration | Behavior |
 |-------|----------|----------|
 | 1 (TAG) | 0–30s | Proximity damage only — 10 HP/s within 8 studs of a burner. |
-| 2 (TRAILS) | 30–60s | Adds: each burner emits a continuous flame `ParticleEmitter`, and an invisible hazard part is dropped at their feet every 0.25s. Hazard parts last 5s and deal 5 HP/s within 4 studs. |
-| 3 (INFERNO) | 60–90s | Adds: anything a burner physically touches catches fire for 5s (4-stud, 5 HP/s), unless tagged `Fireproof` or part of a player character. |
+| 2 (TRAILS) | 30–60s | Adds: each burner leaves a continuous **fire wall** behind them. Tall (6 studs), thin Neon segments are dropped between successive foot positions whenever the burner moves at least `TRAIL_SEGMENT_MIN_LENGTH` studs. Walls last 5s and deal 5 HP/s to anything within `TRAIL_RADIUS` of the wall surface (≈ "touching it"). |
+| 3 (INFERNO) | 60–90s | Adds: anything a burner physically touches catches fire **for the rest of the round** (4-stud, 5 HP/s) — ignited parts never extinguish until `endRound`. Does not apply to parts with a `Fireproof` `BoolValue` child set to `true`, or to player characters. |
 
 ### Conversion rule
 
@@ -93,9 +97,9 @@ Set up by `RoundManager.setBurning` on conversion and torn down by `setSafe`/`se
 - **`BurnFire`** — `Fire` instance on the burner's torso (visible flames on the body).
 - **`BurnOutline`** — `Highlight` named `BurnOutline`, orange (`255,130,0`), `FillTransparency = 1` (outline-only), `DepthMode = AlwaysOnTop`. Lets safe players spot burners through walls.
 
-`FireSpreadSystem` adds two more, only during stages 2/3:
+`FireSpreadSystem` adds these, only during stages 2/3:
 
-- **Trail emitter** — `ParticleEmitter` named `TrailEmitter` on a foot-level `Attachment` named `TrailEmitterPoint` under `HumanoidRootPart`. `LockedToPart = false` so particles stay world-positioned as the burner walks. On detach, `Enabled = false` first; instance destroyed 2.5s later so live particles can finish.
+- **Fire-wall trail** — Stage 2+. Not parented to the burner; lives in `Workspace.FireHazards`. Each segment is a `Part` named `TrailWall` (Neon, orange, ~35% transparent) with a `WallFlame` `ParticleEmitter` child. New segments are produced from the heartbeat loop in `step` whenever the burner has moved at least `TRAIL_SEGMENT_MIN_LENGTH` from the last anchor. After `TRAIL_DURATION` the emitter is disabled and the part is destroyed `WALL_FADE_OUT` later so particles can finish.
 - **Touched listeners** — Stage 3 only. One per `BasePart` of the burner's character.
 
 ## Map Authoring
@@ -105,18 +109,18 @@ Maps live in `ServerStorage.Maps` (each is a `Model`). At runtime they are clone
 Required structure inside each map Model:
 - `SpawnPoints/` folder containing `BasePart`s named `SpawnPoint`.
 
-For Stage 3 to behave correctly, **tag any part that should NOT catch fire** with the `Fireproof` CollectionService tag (typically: ground, walls, large terrain). Untagged parts will ignite when a burner touches them. This is opt-out by design — most props should burn.
+For Stage 3 to behave correctly, **mark any part that should NOT catch fire** by parenting a `BoolValue` named `Fireproof` (with `Value = true`) under it (typically: ground, walls, large terrain). Parts without that child will ignite when a burner touches them. This is opt-out by design — most props should burn.
 
 ## Hazard System
 
 `FireSpreadSystem` creates two kinds of damage hazards, both registered with `InfectionSystem.registerHazard(part, radius)`:
 
-- **Trail hazards** — fully invisible (`Transparency = 1`, no `Fire` child) parts placed under `Workspace.FireHazards`. Pure damage hitboxes. Visual fire is provided separately by the per-burner `ParticleEmitter`.
-- **Ignited parts** — `Fire` instance added directly to the touched map part. Fire is removed after `IGNITE_DURATION`; the part itself is left intact.
+- **Trail walls** — visible Neon orange `TrailWall` parts in `Workspace.FireHazards`. Both the visual and the damage hitbox.
+- **Ignited parts** — six `BurnFlames_<Face>` `ParticleEmitter`s parented directly to the touched map part (one per `NormalId`: Top/Bottom/Front/Back/Left/Right) so flames cover **every face** of the object, not just the centre or the top. Each emitter's `Rate` is scaled by that face's area (clamped 6–80). Ignited parts **never self-extinguish** — they keep burning until `FireSpreadSystem.stop()` is called at round end, which removes the emitters and unregisters the hazards. The part itself is left intact.
 
-Both deal `HAZARD_DAMAGE_PER_SEC` (half of direct burner damage). Direct burner contact takes priority over hazards in the damage check.
+Both deal `HAZARD_DAMAGE_PER_SEC` (half of direct burner damage). `InfectionSystem` measures distance from the **closest point on the hazard's bounding box** to the player's HRP, so long wall segments damage along their full length, not just near their center. Direct burner contact takes priority over hazards in the damage check.
 
-`FireSpreadSystem.stop()` (called from `endRound`) destroys the hazard folder, clears any lingering ignited fires from map geometry, and detaches all per-burner trail emitters and Touched listeners.
+`FireSpreadSystem.stop()` (called from `endRound`) destroys the hazard folder, clears any lingering ignited fires from map geometry, and detaches all Touched listeners.
 
 ## Rojo & Project Config
 
@@ -144,9 +148,9 @@ Quick smoke checklist after changes:
 2. Secondary frame shows `1:30  |  2/3` (timer flips red below 30s).
 3. Standing in burner range drains the default health bar at ~10 HP/s; moving away stops the drain (no regen).
 4. HP hitting 0 swaps the player to burning — no death animation, no respawn. Kill feed shows `"Killer burned Victim"`.
-5. Stage 2: continuous flame ribbon visible behind burners; safe players walking through it take ~5 HP/s.
-6. Stage 3: burner brushes a prop → prop ignites; brushes a `Fireproof`-tagged wall → nothing.
+5. Stage 2: tall fire walls trail behind moving burners and stay around for ~5 seconds; safe players who walk into one take ~5 HP/s.
+6. Stage 3: burner brushes a prop → prop ignites with flames visible on **every face** and stays burning for the rest of the round; brushes a wall with a `Fireproof` `BoolValue` child (`Value = true`) → nothing.
 7. All burners visibly outlined orange (visible through walls).
-8. Round end clears all trail parts, ignited fires, hazard folder, **and the cloned map** (`Workspace.LoadedMap` is gone).
+8. Round end clears all trail walls, ignited fires, hazard folder, **and the cloned map** (`Workspace.LoadedMap` is gone).
 
 If you start the server and immediately hear the intermission countdown loop forever, check Output for `MapManager: ServerStorage.Maps ...` warnings — that's the cause.

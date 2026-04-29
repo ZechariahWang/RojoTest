@@ -9,15 +9,23 @@ local InfectionSystem = require(script.Parent.InfectionSystem)
 
 local FireSpreadSystem = {}
 
-local TRAIL_FADE_OUT = 2.5
+local WALL_FADE_OUT = 1.5
 
 local active = false
 local currentStage = 0
-local lastTrailEmit: { [Player]: number } = {}
+local lastTrailPos: { [Player]: Vector3 } = {}
 local igniteConnections: { [Player]: { RBXScriptConnection } } = {}
-local ignitedFires: { [Fire]: BasePart } = {}
-local trailEmitters: { [Player]: { attachment: Attachment, emitter: ParticleEmitter } } = {}
+local ignitedEmitters: { [BasePart]: { ParticleEmitter } } = {}
 local hazardFolder: Folder? = nil
+
+local IGNITE_FACES = {
+	Enum.NormalId.Top,
+	Enum.NormalId.Bottom,
+	Enum.NormalId.Front,
+	Enum.NormalId.Back,
+	Enum.NormalId.Left,
+	Enum.NormalId.Right,
+}
 
 local function getOrCreateHazardFolder(): Folder
 	if hazardFolder and hazardFolder.Parent then
@@ -36,31 +44,13 @@ local function getRoot(player: Player): BasePart?
 	return char:FindFirstChild("HumanoidRootPart") :: BasePart?
 end
 
-local function spawnHazardPart(position: Vector3)
-	local part = Instance.new("Part")
-	part.Name = "TrailHazard"
-	part.Size = Vector3.new(2, 0.2, 2)
-	part.Anchored = true
-	part.CanCollide = false
-	part.CanQuery = false
-	part.CanTouch = false
-	part.Transparency = 1
-	part.Position = position
-	part.Parent = getOrCreateHazardFolder()
-
-	InfectionSystem.registerHazard(part, Constants.TRAIL_RADIUS)
-
-	task.delay(Constants.TRAIL_DURATION, function()
-		InfectionSystem.unregisterHazard(part)
-		if part.Parent then
-			part:Destroy()
-		end
-	end)
+local function footPosition(root: BasePart): Vector3
+	return Vector3.new(root.Position.X, root.Position.Y - 2.5, root.Position.Z)
 end
 
-local function buildTrailEmitter(): ParticleEmitter
+local function buildWallParticles(parent: BasePart)
 	local emitter = Instance.new("ParticleEmitter")
-	emitter.Name = "TrailEmitter"
+	emitter.Name = "WallFlame"
 	emitter.Texture = "rbxasset://textures/particles/fire_main.dds"
 	emitter.Color = ColorSequence.new({
 		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 220, 90)),
@@ -68,8 +58,8 @@ local function buildTrailEmitter(): ParticleEmitter
 		ColorSequenceKeypoint.new(1, Color3.fromRGB(140, 20, 0)),
 	})
 	emitter.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1.4),
-		NumberSequenceKeypoint.new(0.5, 1.0),
+		NumberSequenceKeypoint.new(0, 1.6),
+		NumberSequenceKeypoint.new(0.5, 1.1),
 		NumberSequenceKeypoint.new(1, 0.2),
 	})
 	emitter.Transparency = NumberSequence.new({
@@ -77,88 +67,146 @@ local function buildTrailEmitter(): ParticleEmitter
 		NumberSequenceKeypoint.new(0.7, 0.55),
 		NumberSequenceKeypoint.new(1, 1),
 	})
-	emitter.Lifetime = NumberRange.new(1.6, 2.4)
-	emitter.Rate = 90
-	emitter.Speed = NumberRange.new(0.4, 1.2)
-	emitter.SpreadAngle = Vector2.new(25, 25)
-	emitter.Acceleration = Vector3.new(0, 2, 0)
+	emitter.Lifetime = NumberRange.new(0.9, 1.6)
+	emitter.Rate = 80
+	emitter.Speed = NumberRange.new(0.5, 1.4)
+	emitter.SpreadAngle = Vector2.new(20, 20)
+	emitter.Acceleration = Vector3.new(0, 4, 0)
 	emitter.LightEmission = 0.6
 	emitter.LightInfluence = 0
 	emitter.Rotation = NumberRange.new(0, 360)
 	emitter.RotSpeed = NumberRange.new(-30, 30)
-	emitter.LockedToPart = false
 	emitter.EmissionDirection = Enum.NormalId.Top
-	return emitter
+	emitter.Parent = parent
 end
 
-local function attachTrailEmitter(player: Player)
-	if trailEmitters[player] then return end
-	local root = getRoot(player)
-	if not root then return end
+local function spawnWallSegment(fromPos: Vector3, toPos: Vector3)
+	local diff = toPos - fromPos
+	local horizontal = Vector3.new(diff.X, 0, diff.Z)
+	local length = horizontal.Magnitude
+	if length < 0.05 then return end
 
-	local attachment = Instance.new("Attachment")
-	attachment.Name = "TrailEmitterPoint"
-	attachment.Position = Vector3.new(0, -2.5, 0)
-	attachment.Parent = root
+	local height = Constants.TRAIL_WALL_HEIGHT
+	local thickness = Constants.TRAIL_WALL_THICKNESS
 
-	local emitter = buildTrailEmitter()
-	emitter.Parent = attachment
+	local baseY = math.min(fromPos.Y, toPos.Y)
+	local mid = Vector3.new((fromPos.X + toPos.X) * 0.5, baseY + height * 0.5, (fromPos.Z + toPos.Z) * 0.5)
+	local cf = CFrame.lookAt(mid, mid + horizontal)
 
-	trailEmitters[player] = { attachment = attachment, emitter = emitter }
-end
+	local part = Instance.new("Part")
+	part.Name = "TrailWall"
+	part.Size = Vector3.new(thickness, height, length)
+	part.CFrame = cf
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.Material = Enum.Material.Neon
+	part.Color = Color3.fromRGB(255, 110, 20)
+	part.Transparency = 0.35
+	part.Parent = getOrCreateHazardFolder()
 
-local function detachTrailEmitter(player: Player)
-	local entry = trailEmitters[player]
-	if not entry then return end
-	trailEmitters[player] = nil
+	buildWallParticles(part)
 
-	local emitter = entry.emitter
-	local attachment = entry.attachment
-	if emitter and emitter.Parent then
-		emitter.Enabled = false
-	end
-	task.delay(TRAIL_FADE_OUT, function()
-		if emitter and emitter.Parent then emitter:Destroy() end
-		if attachment and attachment.Parent then attachment:Destroy() end
+	InfectionSystem.registerHazard(part, Constants.TRAIL_RADIUS)
+
+	task.delay(Constants.TRAIL_DURATION, function()
+		InfectionSystem.unregisterHazard(part)
+		if not part.Parent then return end
+		for _, child in part:GetChildren() do
+			if child:IsA("ParticleEmitter") then
+				child.Enabled = false
+			end
+		end
+		task.delay(WALL_FADE_OUT, function()
+			if part.Parent then
+				part:Destroy()
+			end
+		end)
 	end)
 end
 
-local function attachAllTrailEmitters()
-	for _, player in PlayerState.getAllInState(Constants.STATE_BURNING) do
-		attachTrailEmitter(player)
+local function primeTrailFor(player: Player)
+	local root = getRoot(player)
+	if root then
+		lastTrailPos[player] = footPosition(root)
 	end
 end
 
-local function detachAllTrailEmitters()
-	for player in trailEmitters do
-		detachTrailEmitter(player)
+local function primeTrailForAllBurners()
+	for _, player in PlayerState.getAllInState(Constants.STATE_BURNING) do
+		primeTrailFor(player)
 	end
+end
+
+local function buildFaceEmitter(face: Enum.NormalId, rate: number): ParticleEmitter
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Name = "BurnFlames_" .. face.Name
+	emitter.Texture = "rbxasset://textures/particles/fire_main.dds"
+	emitter.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 220, 90)),
+		ColorSequenceKeypoint.new(0.4, Color3.fromRGB(255, 130, 0)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(140, 20, 0)),
+	})
+	emitter.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 2.),
+		NumberSequenceKeypoint.new(0.4, 4),
+		NumberSequenceKeypoint.new(1, 6),
+	})
+	emitter.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.0),
+		NumberSequenceKeypoint.new(0.3, 0.15),
+		NumberSequenceKeypoint.new(0.75, 0.5),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+
+	emitter.Lifetime = NumberRange.new(1.0, 1.5)
+	emitter.Speed = NumberRange.new(4, 8)
+	emitter.SpreadAngle = Vector2.new(40, 40)
+	emitter.Acceleration = Vector3.new(0, 7, 0)
+	emitter.LightEmission = 1
+	emitter.LightInfluence = 0
+	emitter.Rotation = NumberRange.new(0, 360)
+	emitter.RotSpeed = NumberRange.new(-50, 50)
+	emitter.EmissionDirection = face
+	emitter.Rate = rate
+	-- Push the billboard toward the camera so it doesn't z-fight with the face
+	-- it's spawning on (otherwise head-on viewers see nothing).
+	emitter.ZOffset = 0.5
+	return emitter
 end
 
 local function igniteTouchedPart(hit: BasePart)
 	if not hit.Parent then return end
-	if hit:HasTag(Constants.TAG_FIREPROOF) then return end
+	local flag = hit:FindFirstChild(Constants.FIREPROOF_FLAG_NAME)
+	if flag and flag:IsA("BoolValue") and flag.Value then return end
 	if Players:GetPlayerFromCharacter(hit.Parent) then return end
-	if hit:FindFirstChild("BurnFire") then return end
+	if ignitedEmitters[hit] then return end -- already burning
 
-	local fire = Instance.new("Fire")
-	fire.Name = "BurnFire"
-	fire.Heat = 8
-	fire.Size = 5
-	fire.Color = Color3.fromRGB(255, 130, 0)
-	fire.SecondaryColor = Color3.fromRGB(255, 60, 0)
-	fire.Parent = hit
+	-- Per-face rate scales with that face's area so each side gets proportional flame coverage.
+	local s = hit.Size
+	local rateXZ = math.clamp(s.X * s.Z * 6, 25, 180)
+	local rateXY = math.clamp(s.X * s.Y * 6, 25, 180)
+	local rateYZ = math.clamp(s.Y * s.Z * 6, 25, 180)
+
+	local emitters: { ParticleEmitter } = {}
+	for _, face in IGNITE_FACES do
+		local rate
+		if face == Enum.NormalId.Top or face == Enum.NormalId.Bottom then
+			rate = rateXZ
+		elseif face == Enum.NormalId.Front or face == Enum.NormalId.Back then
+			rate = rateXY
+		else
+			rate = rateYZ
+		end
+		local emitter = buildFaceEmitter(face, rate)
+		emitter.Parent = hit
+		table.insert(emitters, emitter)
+	end
 
 	InfectionSystem.registerHazard(hit, Constants.IGNITE_RADIUS)
-	ignitedFires[fire] = hit
-
-	task.delay(Constants.IGNITE_DURATION, function()
-		InfectionSystem.unregisterHazard(hit)
-		ignitedFires[fire] = nil
-		if fire and fire.Parent then
-			fire:Destroy()
-		end
-	end)
+	ignitedEmitters[hit] = emitters
 end
 
 local function attachIgnite(player: Player)
@@ -200,16 +248,24 @@ local function step(_dt: number)
 	if not active then return end
 	if currentStage < 2 then return end
 
-	local now = os.clock()
 	for _, burner in PlayerState.getAllInState(Constants.STATE_BURNING) do
 		local root = getRoot(burner)
 		if not root then continue end
 
-		local last = lastTrailEmit[burner] or 0
-		if now - last >= Constants.TRAIL_EMIT_INTERVAL then
-			lastTrailEmit[burner] = now
-			local footY = root.Position.Y - 2.5
-			spawnHazardPart(Vector3.new(root.Position.X, footY, root.Position.Z))
+		local foot = footPosition(root)
+		local last = lastTrailPos[burner]
+		if not last then
+			lastTrailPos[burner] = foot
+			continue
+		end
+
+		local moved = (foot - last).Magnitude
+		if moved >= Constants.TRAIL_SEGMENT_MIN_LENGTH then
+			-- Skip emitting on a teleport / huge frame jump, but still resync the anchor.
+			if moved <= Constants.TRAIL_SEGMENT_MAX_LENGTH then
+				spawnWallSegment(last, foot)
+			end
+			lastTrailPos[burner] = foot
 		end
 	end
 end
@@ -231,9 +287,9 @@ function FireSpreadSystem.setStage(stage: number)
 	currentStage = stage
 
 	if stage >= 2 and previous < 2 then
-		attachAllTrailEmitters()
+		primeTrailForAllBurners()
 	elseif stage < 2 and previous >= 2 then
-		detachAllTrailEmitters()
+		table.clear(lastTrailPos)
 	end
 
 	if stage >= 3 and previous < 3 then
@@ -246,38 +302,38 @@ end
 function FireSpreadSystem.start()
 	active = true
 	currentStage = 1
-	table.clear(lastTrailEmit)
+	table.clear(lastTrailPos)
 end
 
 function FireSpreadSystem.stop()
 	active = false
 	currentStage = 0
-	table.clear(lastTrailEmit)
+	table.clear(lastTrailPos)
 	detachAllIgnite()
-	detachAllTrailEmitters()
 	clearHazardFolder()
-	for fire, part in ignitedFires do
+	for part, emitters in ignitedEmitters do
 		InfectionSystem.unregisterHazard(part)
-		if fire and fire.Parent then
-			fire:Destroy()
+		for _, emitter in emitters do
+			if emitter and emitter.Parent then
+				emitter:Destroy()
+			end
 		end
 	end
-	table.clear(ignitedFires)
+	table.clear(ignitedEmitters)
 end
 
 local function onStateChanged(player: Player, _oldState: string?, newState: string)
 	if not active then return end
 	if newState == Constants.STATE_BURNING then
 		if currentStage >= 2 then
-			attachTrailEmitter(player)
+			primeTrailFor(player)
 		end
 		if currentStage >= 3 then
 			attachIgnite(player)
 		end
 	else
 		detachIgnite(player)
-		detachTrailEmitter(player)
-		lastTrailEmit[player] = nil
+		lastTrailPos[player] = nil
 	end
 end
 
@@ -288,8 +344,7 @@ function FireSpreadSystem.init()
 
 	Players.PlayerRemoving:Connect(function(player)
 		detachIgnite(player)
-		detachTrailEmitter(player)
-		lastTrailEmit[player] = nil
+		lastTrailPos[player] = nil
 	end)
 end
 

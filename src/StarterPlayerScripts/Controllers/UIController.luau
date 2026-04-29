@@ -71,6 +71,11 @@ local function buildMainText(): string
 		return colorize(WHITE, "WAITING FOR PLAYERS...")
 	elseif currentPhase == Constants.PHASE_INTERMISSION then
 		return colorize(YELLOW, "GET READY!")
+	elseif currentPhase == Constants.PHASE_REVEAL then
+		if endExtra and typeof(endExtra) == "table" and endExtra.burner then
+			return colorize(RED, string.upper(endExtra.burner) .. " IS BURNING!")
+		end
+		return colorize(RED, "BURNER REVEALED")
 	elseif currentPhase == Constants.PHASE_ROUND then
 		if currentStage > 0 then
 			local stageColor = STAGE_COLORS[currentStage] or WHITE
@@ -79,13 +84,21 @@ local function buildMainText(): string
 		end
 		return colorize(WHITE, "BURN RUSH")
 	elseif currentPhase == Constants.PHASE_END then
-		if endExtra and endExtra.winner then
-			return colorize(GREEN, string.upper(endExtra.winner) .. " SURVIVED!")
-		elseif endExtra and endExtra.reason == Constants.REASON_ALL_INFECTED then
-			return colorize(RED, "EVERYONE BURNED!")
-		else
-			return colorize(WHITE, "ROUND ENDED")
+		if endExtra and typeof(endExtra) == "table" then
+			local winners = endExtra.winners
+			if typeof(winners) == "table" and #winners > 0 then
+				if #winners == 1 then
+					return colorize(GREEN, string.upper(winners[1]) .. " SURVIVED!")
+				elseif #winners == 2 then
+					return colorize(GREEN, string.upper(winners[1]) .. " AND " .. string.upper(winners[2]) .. " SURVIVED!")
+				else
+					return colorize(GREEN, string.format("%d PLAYERS SURVIVED!", #winners))
+				end
+			elseif endExtra.reason == Constants.REASON_ALL_INFECTED then
+				return colorize(RED, "EVERYONE BURNED!")
+			end
 		end
+		return colorize(WHITE, "ROUND ENDED")
 	end
 	return ""
 end
@@ -101,6 +114,12 @@ local function buildSecondaryText(): string
 			return colorize(color, string.format("Starting in %ds", math.ceil(remaining)))
 		end
 		return ""
+	elseif currentPhase == Constants.PHASE_REVEAL then
+		if phaseEndTime > 0 then
+			local remaining = math.max(0, phaseEndTime - os.time())
+			return colorize(YELLOW, string.format("Position yourself! %ds", math.ceil(remaining)))
+		end
+		return colorize(YELLOW, "Position yourself!")
 	elseif currentPhase == Constants.PHASE_ROUND then
 		local parts: { string } = {}
 		if phaseEndTime > 0 then

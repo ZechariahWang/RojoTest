@@ -31,6 +31,17 @@ local function getRoot(player: Player): BasePart?
 	return char:FindFirstChild("HumanoidRootPart") :: BasePart?
 end
 
+local function closestPointOnPart(part: BasePart, pos: Vector3): Vector3
+	local localPos = part.CFrame:PointToObjectSpace(pos)
+	local half = part.Size * 0.5
+	local clamped = Vector3.new(
+		math.clamp(localPos.X, -half.X, half.X),
+		math.clamp(localPos.Y, -half.Y, half.Y),
+		math.clamp(localPos.Z, -half.Z, half.Z)
+	)
+	return part.CFrame:PointToWorldSpace(clamped)
+end
+
 local function step(dt: number)
 	if not active then return end
 
@@ -71,10 +82,13 @@ local function step(dt: number)
 
 		if rate == 0 then
 			for part, info in hazards do
-				if part.Parent and (part.Position - safeRoot.Position).Magnitude <= info.radius then
-					rate = Constants.HAZARD_DAMAGE_PER_SEC
-					source = part
-					break
+				if part.Parent then
+					local nearest = closestPointOnPart(part, safeRoot.Position)
+					if (nearest - safeRoot.Position).Magnitude <= info.radius then
+						rate = Constants.HAZARD_DAMAGE_PER_SEC
+						source = part
+						break
+					end
 				end
 			end
 		end

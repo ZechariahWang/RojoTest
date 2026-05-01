@@ -77,7 +77,7 @@ The `Remotes` folder lives in Studio (not Rojo source); it is preserved across s
 
 ## Round Flow
 
-`Lobby → Intermission (10s) → RoleReveal (3.5s) → Reveal (10s) → Round (90s, 3 × 30s stages) → End (5s) → Lobby`
+`Lobby → Intermission (10s) → RoleReveal (8s) → Reveal (10s) → Round (90s, 3 × 30s stages) → End (5s) → Lobby`
 
 `gameLoop` loads the map **before** broadcasting `Intermission`. If the map fails to load (no `ServerStorage.Maps`, or it's empty), it warns and stays in the `Lobby` phase instead of getting stuck cycling through intermission.
 

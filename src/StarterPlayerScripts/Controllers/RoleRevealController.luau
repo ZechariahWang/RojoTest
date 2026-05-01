@@ -20,9 +20,9 @@ local currentPhase: string = Constants.PHASE_LOBBY
 local CYCLE_DURATION = 2.0
 local CYCLE_INTERVAL_FAST = 0.04
 local CYCLE_INTERVAL_SLOW = 0.30
-local SETTLE_TIME = 0.5
+local SETTLE_TIME = 3.0 
 local ENTRANCE_TIME = 0.3
-local EXIT_TIME = 0.5
+local EXIT_TIME = 1
 
 local function ensureScale(parent: GuiObject): UIScale
 	local existing = parent:FindFirstChildOfClass("UIScale")
@@ -83,19 +83,14 @@ local function playReveal(localIsBurner: boolean, durationBudget: number)
 	if not resolveElements() then return end
 	assert(roleFrame and frameScale and labelScale)
 
-	-- Reset to clean entrance state (in case a previous reveal left things mid-tween).
+	-- Reset to clean entrance state
 	frameScale.Scale = 0
 	labelScale.Scale = 1
 	roleFrame.Visible = true
 
-	-- Late joiners get a shorter budget; if it's significantly truncated, skip
-	-- the cycle so the settle + exit still fit before PHASE_REVEAL begins.
 	local skipCycle = durationBudget < (Constants.ROLE_REVEAL_TIME * 0.6)
-	-- Pre-paint the final role under the (still-zero-scale) frame so the very
-	-- first frame after the entrance starts isn't blank.
 	setRoleText(localIsBurner)
 
-	-- Entrance.
 	tween(frameScale,
 		TweenInfo.new(ENTRANCE_TIME, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
 		{ Scale = 1 }
@@ -103,7 +98,6 @@ local function playReveal(localIsBurner: boolean, durationBudget: number)
 	task.wait(ENTRANCE_TIME)
 	if bailIfStale(myGen) then return end
 
-	-- Cycle.
 	if not skipCycle then
 		local elapsed = 0
 		local idx = 0
@@ -118,7 +112,6 @@ local function playReveal(localIsBurner: boolean, durationBudget: number)
 		end
 	end
 
-	-- Settle: paint the real role + small punch on the label.
 	setRoleText(localIsBurner)
 	labelScale.Scale = 1.25
 	tween(labelScale,
@@ -128,12 +121,11 @@ local function playReveal(localIsBurner: boolean, durationBudget: number)
 	task.wait(SETTLE_TIME)
 	if bailIfStale(myGen) then return end
 
-	-- Exit.
 	tween(frameScale,
 		TweenInfo.new(EXIT_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
 		{ Scale = 0 }
 	)
-	task.wait(EXIT_TIME)
+	task.wait(EXIT_TIME+1)
 	if bailIfStale(myGen) then return end
 	if roleFrame then roleFrame.Visible = false end
 end

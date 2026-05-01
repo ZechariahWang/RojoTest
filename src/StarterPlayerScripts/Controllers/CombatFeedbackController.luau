@@ -216,9 +216,7 @@ local function spawnDamageNumber(victim: Player, dmg: number)
 end
 
 local function damageNumberStep(_dt: number)
-	-- Flush each victim's accumulated damage every DAMAGE_FLUSH_INTERVAL while
-	-- damage is still streaming in. If a flush interval passes with no new
-	-- damage (total == 0), the entry is cleaned up.
+	-- Flush each victim's accumulated damage at a fixed interval 
 	local now = os.clock()
 	for victim, entry in pendingDamage do
 		if now < entry.nextFlushAt then continue end

@@ -3,7 +3,7 @@ local Constants = {}
 -- ROUND
 Constants.MIN_PLAYERS = 2
 Constants.INTERMISSION_TIME = 10
-Constants.ROLE_REVEAL_TIME = 3.5 -- role-reveal UI animation window (no actions allowed)
+Constants.ROLE_REVEAL_TIME = 8.0 -- role-reveal UI animation window (no actions allowed)
 Constants.REVEAL_TIME = 10 -- post-role-reveal positioning grace. No damage, no abilities.
 Constants.ROUND_TIME = 90
 Constants.END_TIME = 5

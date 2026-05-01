@@ -4,6 +4,7 @@ local RunService = game:GetService("RunService")
 
 local Constants = require(ReplicatedStorage.Shared.Constants)
 local PlayerState = require(script.Parent.PlayerState)
+local FireAttackSystem = require(script.Parent.FireAttackSystem)
 
 local InfectionSystem = {}
 
@@ -13,6 +14,22 @@ local hazards: { [BasePart]: { radius: number } } = {}
 
 local infectedEvent = Instance.new("BindableEvent")
 InfectionSystem.PlayerInfected = infectedEvent.Event
+
+local DamageDealtRemote: RemoteEvent
+local DamageTakenRemote: RemoteEvent
+
+local CONE_DOT_THRESHOLD = math.cos(math.rad(Constants.FIRE_CONE_HALF_ANGLE))
+
+local function ensureRemote(parent: Instance, name: string): RemoteEvent
+	local existing = parent:FindFirstChild(name)
+	if existing and existing:IsA("RemoteEvent") then
+		return existing
+	end
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = name
+	remote.Parent = parent
+	return remote
+end
 
 local function getHumanoid(player: Player): Humanoid?
 	local char = player.Character
@@ -42,27 +59,33 @@ local function closestPointOnPart(part: BasePart, pos: Vector3): Vector3
 	return part.CFrame:PointToWorldSpace(clamped)
 end
 
+local function inFireCone(burner: FireAttackSystem.FiringInfo, targetPos: Vector3): boolean
+	local toTarget = targetPos - burner.root.Position
+	local dist = toTarget.Magnitude
+	if dist > Constants.FIRE_CONE_RANGE then return false end
+	if dist < 0.001 then return true end -- standing on top of the burner
+	local dot = burner.lookVector:Dot(toTarget.Unit)
+	return dot >= CONE_DOT_THRESHOLD
+end
+
 local function step(dt: number)
 	if not active then return end
 
 	local now = os.clock()
-	local burners: { Player } = {}
-	local safes: { Player } = {}
 
-	for _, player in Players:GetPlayers() do
-		if not isAlive(player) then continue end
-		local state = PlayerState.get(player)
-		if state == Constants.STATE_BURNING then
-			local graceEnd = burnerGrace[player]
-			if not graceEnd or now >= graceEnd then
-				table.insert(burners, player)
-			end
-		elseif state == Constants.STATE_SAFE then
-			table.insert(safes, player)
-		end
+	-- Filter firing burners to those past their grace window.
+	local rawFiring = FireAttackSystem.getFiringBurners()
+	local firing: { FireAttackSystem.FiringInfo } = {}
+	for _, info in rawFiring do
+		local graceEnd = burnerGrace[info.player]
+		if graceEnd and now < graceEnd then continue end
+		table.insert(firing, info)
 	end
 
-	for _, safe in safes do
+	for _, safe in Players:GetPlayers() do
+		if PlayerState.get(safe) ~= Constants.STATE_SAFE then continue end
+		if not isAlive(safe) then continue end
+
 		local safeRoot = getRoot(safe)
 		if not safeRoot then continue end
 		local hum = getHumanoid(safe)
@@ -71,20 +94,19 @@ local function step(dt: number)
 		local rate = 0
 		local source: any = nil
 
-		for _, burner in burners do
-			local burnerRoot = getRoot(burner)
-			if burnerRoot and (burnerRoot.Position - safeRoot.Position).Magnitude <= Constants.INFECTION_RADIUS then
-				rate = Constants.BURNER_DAMAGE_PER_SEC
-				source = burner
+		for _, info in firing do
+			if inFireCone(info, safeRoot.Position) then
+				rate = Constants.FIRE_DAMAGE_PER_SEC
+				source = info.player
 				break
 			end
 		end
 
 		if rate == 0 then
-			for part, info in hazards do
+			for part, hazardInfo in hazards do
 				if part.Parent then
 					local nearest = closestPointOnPart(part, safeRoot.Position)
-					if (nearest - safeRoot.Position).Magnitude <= info.radius then
+					if (nearest - safeRoot.Position).Magnitude <= hazardInfo.radius then
 						rate = Constants.HAZARD_DAMAGE_PER_SEC
 						source = part
 						break
@@ -94,12 +116,23 @@ local function step(dt: number)
 		end
 
 		if rate > 0 then
-			local newHealth = hum.Health - rate * dt
+			local dmg = rate * dt
+			local newHealth = hum.Health - dmg
 			if newHealth <= 0 then
 				hum.Health = hum.MaxHealth
 				infectedEvent:Fire(safe, source)
 			else
 				hum.Health = newHealth
+				if typeof(source) == "Instance" and source:IsA("Player") then
+					if DamageDealtRemote then
+						DamageDealtRemote:FireClient(source, safe, dmg, newHealth)
+					end
+					if DamageTakenRemote then
+						DamageTakenRemote:FireClient(safe, source, dmg, newHealth)
+					end
+				elseif DamageTakenRemote then
+					DamageTakenRemote:FireClient(safe, nil, dmg, newHealth)
+				end
 			end
 		end
 	end
@@ -134,6 +167,10 @@ function InfectionSystem.stop()
 end
 
 function InfectionSystem.init()
+	local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+	DamageDealtRemote = ensureRemote(Remotes, "DamageDealt")
+	DamageTakenRemote = ensureRemote(Remotes, "DamageTaken")
+
 	RunService.Heartbeat:Connect(step)
 
 	Players.PlayerRemoving:Connect(function(player)

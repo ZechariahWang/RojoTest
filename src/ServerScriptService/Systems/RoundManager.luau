@@ -4,6 +4,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage.Shared.Constants)
 local PlayerState = require(script.Parent.PlayerState)
 local InfectionSystem = require(script.Parent.InfectionSystem)
+local FireAttackSystem = require(script.Parent.FireAttackSystem)
 local FireSpreadSystem = require(script.Parent.FireSpreadSystem)
 local MapManager = require(script.Parent.MapManager)
 
@@ -100,7 +101,6 @@ local function setBurning(player: Player, withGrace: boolean)
 	PlayerState.set(player, Constants.STATE_BURNING)
 	InfectionSystem.markBurner(player, withGrace)
 	setWalkSpeed(player, Constants.BURNING_WALKSPEED)
-	applyFire(player, true)
 	applyOutline(player, true)
 end
 
@@ -135,6 +135,7 @@ local function healAllPlayers()
 end
 
 local function endRound(reason: string, winners: { string })
+	FireAttackSystem.stop()
 	InfectionSystem.stop()
 	FireSpreadSystem.stop()
 	currentStage = 0
@@ -209,6 +210,7 @@ local function runRound()
 
 	InfectionSystem.start()
 	FireSpreadSystem.start()
+	FireAttackSystem.start()
 
 	local roundStart = os.clock()
 	local roundEnd = roundStart + Constants.ROUND_TIME
@@ -239,9 +241,6 @@ local function runRound()
 			endRound(Constants.REASON_ALL_INFECTED, {})
 			return
 		end
-
-		-- No early termination on a single remaining survivor — round runs to the timer
-		-- so they can keep trying to outlast the clock.
 	end
 
 	-- Time up — every safe player is a winner.

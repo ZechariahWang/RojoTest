@@ -3,6 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local SoundService = game:GetService("SoundService")
+local UserInputService = game:GetService("UserInputService")
 
 local Constants = require(ReplicatedStorage.Shared.Constants)
 local CombatFeedbackController = {}
@@ -77,30 +78,55 @@ local function pulseVignette(intensity: number)
 	end)
 end
 
-local function pulseCrosshair()
-	local originalSize = UDim2.fromOffset(8, 8)
-	local punchedSize = UDim2.fromOffset(20, 20)
-	crosshair.BackgroundColor3 = Color3.fromRGB(255, 80, 30)
-	crosshair.BackgroundTransparency = 0
-	crosshair.Size = punchedSize
+local CROSSHAIR_IDLE_SIZE = UDim2.fromOffset(10, 10)
+local CROSSHAIR_FIRING_SIZE = UDim2.fromOffset(22, 22)
+local CROSSHAIR_IDLE_COLOR = Color3.fromRGB(255, 200, 140)
+local CROSSHAIR_FIRING_COLOR = Color3.fromRGB(255, 80, 30)
+local CROSSHAIR_IDLE_TRANSPARENCY = 0.5
+local CROSSHAIR_FIRING_TRANSPARENCY = 0
+local CROSSHAIR_TWEEN_TIME = 0.12
+
+local isBurner = false
+local isFiring = false
+
+local function applyCrosshairFiring(firing: boolean)
+	if not crosshair then return end
 	TweenService:Create(
 		crosshair,
-		TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		TweenInfo.new(CROSSHAIR_TWEEN_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 		{
-			Size = originalSize,
-			BackgroundTransparency = 0.5,
-			BackgroundColor3 = Color3.fromRGB(255, 180, 60),
+			Size = if firing then CROSSHAIR_FIRING_SIZE else CROSSHAIR_IDLE_SIZE,
+			BackgroundColor3 = if firing then CROSSHAIR_FIRING_COLOR else CROSSHAIR_IDLE_COLOR,
+			BackgroundTransparency = if firing then CROSSHAIR_FIRING_TRANSPARENCY else CROSSHAIR_IDLE_TRANSPARENCY,
 		}
 	):Play()
+end
+
+local function setBurnerMode(active: boolean)
+	if active then
+		localPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+		UserInputService.MouseIconEnabled = false
+		if crosshair then
+			crosshair.Size = CROSSHAIR_IDLE_SIZE
+			crosshair.BackgroundColor3 = CROSSHAIR_IDLE_COLOR
+			crosshair.BackgroundTransparency = CROSSHAIR_IDLE_TRANSPARENCY
+			crosshair.Visible = true
+		end
+	else
+		localPlayer.CameraMode = Enum.CameraMode.Classic
+		UserInputService.MouseIconEnabled = true
+		if crosshair then
+			crosshair.Visible = false
+		end
+		isFiring = false
+	end
 end
 
 
 local DAMAGE_BATCH_WINDOW = 0.25
 local pendingDamage: { [Player]: { total: number, expireAt: number } } = {}
 local HIT_CONFIRM_THROTTLE = 0.08
-local CROSSHAIR_PULSE_THROTTLE = 0.05
 local lastHitConfirmAt = -math.huge
-local lastCrosshairPulseAt = -math.huge
 
 local function colorForDamage(dmg: number): (Color3, Color3)
 	if dmg >= 12 then
@@ -119,7 +145,6 @@ local function spawnDamageNumber(victim: Player, dmg: number)
 	if not head then return end
 
 	local gui = damageNumberTemplate:Clone()
-	-- Random horizontal offset so consecutive numbers don't perfectly stack.
 	local hOffset = (math.random() - 0.5) * 1.6
 	gui.StudsOffset = Vector3.new(hOffset, 1.2, 0)
 	gui.Parent = head
@@ -267,10 +292,6 @@ local function onDamageDealt(victim: Player, dmg: number, _victimHP: number)
 		playSound(SOUND_IDS.hitConfirm, 0.6)
 		lastHitConfirmAt = now
 	end
-	if now - lastCrosshairPulseAt >= CROSSHAIR_PULSE_THROTTLE then
-		pulseCrosshair()
-		lastCrosshairPulseAt = now
-	end
 
 	local entry = pendingDamage[victim]
 	if entry then
@@ -309,14 +330,42 @@ end
 function CombatFeedbackController.init()
 
 	initHUD()
+	-- Burner mode + custom crosshair are off until the local player is Burning.
+	setBurnerMode(false)
+
 	local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 	local DamageDealtRemote = Remotes:WaitForChild("DamageDealt") :: RemoteEvent
 	local DamageTakenRemote = Remotes:WaitForChild("DamageTaken") :: RemoteEvent
 	local KillFeedRemote = Remotes:WaitForChild("KillFeed") :: RemoteEvent
+	local PlayerStateRemote = Remotes:WaitForChild("PlayerStateChanged") :: RemoteEvent
 
 	DamageDealtRemote.OnClientEvent:Connect(onDamageDealt)
 	DamageTakenRemote.OnClientEvent:Connect(onDamageTaken)
 	KillFeedRemote.OnClientEvent:Connect(onKillFeed)
+
+	PlayerStateRemote.OnClientEvent:Connect(function(player: Player, state: string)
+		if player ~= localPlayer then return end
+		local nowBurner = state == Constants.STATE_BURNING
+		if nowBurner == isBurner then return end
+		isBurner = nowBurner
+		setBurnerMode(nowBurner)
+	end)
+
+	UserInputService.InputBegan:Connect(function(input, gpe)
+		if gpe then return end
+		if not isBurner then return end
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+		if isFiring then return end
+		isFiring = true
+		applyCrosshairFiring(true)
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+		if not isFiring then return end
+		isFiring = false
+		applyCrosshairFiring(false)
+	end)
 
 	localPlayer.CharacterAdded:Connect(onCharacterAdded)
 	if localPlayer.Character then

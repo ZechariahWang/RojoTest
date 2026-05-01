@@ -71,6 +71,8 @@ local function buildMainText(): string
 		return colorize(WHITE, "WAITING FOR PLAYERS...")
 	elseif currentPhase == Constants.PHASE_INTERMISSION then
 		return colorize(YELLOW, "GET READY!")
+	elseif currentPhase == Constants.PHASE_ROLE_REVEAL then
+		return ""
 	elseif currentPhase == Constants.PHASE_REVEAL then
 		if endExtra and typeof(endExtra) == "table" and endExtra.burner then
 			return colorize(RED, string.upper(endExtra.burner) .. " IS BURNING!")
@@ -107,6 +109,8 @@ local function buildSecondaryText(): string
 	if currentPhase == Constants.PHASE_LOBBY then
 		local lobbyCount = countByState(Constants.STATE_LOBBY)
 		return colorize(WHITE, string.format("Players: %d / %d", lobbyCount, Constants.MIN_PLAYERS))
+	elseif currentPhase == Constants.PHASE_ROLE_REVEAL then
+		return ""
 	elseif currentPhase == Constants.PHASE_INTERMISSION then
 		if phaseEndTime > 0 then
 			local remaining = math.max(0, phaseEndTime - os.time())

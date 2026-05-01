@@ -23,17 +23,18 @@ A round-based Roblox tag-style game. One player starts "burning" and converts ot
 - `Systems/InfectionSystem.luau` — damage engine. Each Heartbeat, iterates safe players; for each, checks (a) the cone of every actively-firing burner from `FireAttackSystem`, then (b) registered hazards (trail walls, ignited parts). Sends `DamageDealt`/`DamageTaken` RemoteEvents when a tick lands. When HP hits 0, fires `PlayerInfected` and restores HP (no actual death). Auto-creates the `DamageDealt` and `DamageTaken` remotes on `init()`.
 - `Systems/FireSpreadSystem.luau` — owns Stage 2 fire-wall trails and Stage 3 touch-ignition. Wall segments are visible Neon parts with flame `ParticleEmitter`s — they double as the visual and the damage hitbox.
 - `Systems/MapManager.luau` — clones map from `ServerStorage.Maps` into `Workspace.LoadedMap`, manages spawn points and lobby teleport. Warns at `init()` if `ServerStorage.Maps` is missing or empty.
-- `Systems/AbilitySystem.luau` — dash mechanic for safe players (Q key).
+- `Systems/AbilitySystem.luau` — dash mechanic for safe players (Q key). Phase-gated via `start()` / `stop()`: dash is rejected outside the active `Round` phase, so safe players cannot dash during reveal/role-reveal/lobby. `start()` also clears `lastDash` so cooldowns don't carry across rounds.
 
 ### Client (`src/StarterPlayerScripts/`)
 
-- `Main.client.luau` — bootstrap. Inits `DashController`, `UIController`, `KillFeedController`, `FireAttackController`, `CombatFeedbackController` (in that order).
-- `Controllers/UIController.luau` — reads phase/stage/player-state remotes, renders RichText into two labels: `Game.StatusFrame.Status` (main announcements + stage) and `Game.SecondaryStatus.Secondary` (timer + alive count). Alive count excludes the local player (`safe / total-1`).
+- `Main.client.luau` — bootstrap. Inits `DashController`, `UIController`, `KillFeedController`, `RoleRevealController`, `FireAttackController`, `CombatFeedbackController` (in that order).
+- `Controllers/UIController.luau` — reads phase/stage/player-state remotes, renders RichText into two labels: `Game.StatusFrame.Status` (main announcements + stage) and `Game.SecondaryStatus.Secondary` (timer + alive count). Alive count excludes the local player (`safe / total-1`). Both labels are blanked during `PHASE_ROLE_REVEAL` so the role UI has the screen to itself.
 - `Controllers/KillFeedController.luau` — listens to `KillFeed` remote, clones `Game.ID_Objects.KillData` into `Game.Killfeed` per kill, animates entrance/exit (TweenService), maintains a queue.
 - `Controllers/DashController.luau` — sends `DashRequest` on Q.
+- `Controllers/RoleRevealController.luau` — drives the per-player role-reveal animation during `PHASE_ROLE_REVEAL`. Reads `extra.burner` from the phase broadcast to derive `localIsBurner`, then animates `Game.Role` (Frame, with TextLabel children `Title` (static heading, never touched) and `ROLE` (cycled)). Timeline: 0.3s entrance (UIScale 0→1, Back/Out) → 2s cycle (`ROLE.Text` swaps SURVIVOR/TAGGER, interval easing from 0.04s → 0.30s) → 0.5s settle (final role with a UIScale punch on the label) → 0.5s exit (UIScale 1→0, Quad/In). Uses a `revealGen` generation counter so an in-flight animation bails if the phase changes mid-anim. Late joiners (`duration < ROLE_REVEAL_TIME * 0.6`) skip the cycle.
 - `Controllers/FireAttackController.luau` — burner offense input. While the local player is `Burning`, holding LMB sends `FireRequest(true)`; releasing sends `FireRequest(false)`. Listens to `FuelChanged` to drive `Game.FuelMeter.BarBG.Fill` (size tween) and `Game.FuelMeter.BarBG.EmptyOverlay` (visible when fuel is below `FIRE_FUEL_MIN_TO_START`). Hides the meter for non-burners. Has a `RenderStepped` safety check that releases the hold if mouse-up was missed (e.g., focus lost).
 - `Controllers/CombatFeedbackController.luau` — purely cosmetic. Listens to `DamageDealt` (burner side: throttled hit-confirm sound, batches damage into floating numbers above the victim's head via the `ReplicatedStorage.Assets.UI.DamageNumber` BillboardGui template) and `DamageTaken` (victim side: vignette pulse, camera shake, HP-threshold grunts at 75/50/25%, looping sizzle while taking damage). Also listens to `KillFeed` for kill-confirm whoosh / convert-impact effects. Uses `Game.Vignette` and `Game.Crosshair` GuiObjects. Sound IDs are stubbed (`""`) — see the `SOUND_IDS` table at the top of the file when assets are ready.
-  - **Burner mode**: also listens to `PlayerStateChanged` for the local player. While `Burning`, it shows the custom `Game.Crosshair`, sets `Player.CameraMode = LockFirstPerson`, and disables `UserInputService.MouseIconEnabled` to hide Roblox's default cursor/reticle. On any other state (round end, lobby, conversion-out — though that doesn't currently happen) it hides the crosshair, restores `CameraMode = Classic`, and re-enables the mouse icon.
+  - **Burner mode**: listens to both `PlayerStateChanged` and `RoundStateChanged` for the local player. Burner mode is active iff `state == Burning AND phase ∈ {Reveal, Round}` — deliberately **off** during `PHASE_ROLE_REVEAL` so the camera doesn't lock during the role-reveal animation. When active, it shows the custom `Game.Crosshair`, sets `Player.CameraMode = LockFirstPerson`, and disables `UserInputService.MouseIconEnabled` to hide Roblox's default cursor/reticle. When inactive (round end, lobby, role-reveal in progress) it hides the crosshair, restores `CameraMode = Classic`, and re-enables the mouse icon.
   - **Crosshair**: a continuous two-state visual driven by LMB hold (gated on `isBurner`) — idle while not firing, larger/red while firing, with a smooth 0.12s tween between them. There is **no** per-hit pulse: the crosshair stays in its firing state for the entire LMB-hold, mirroring the continuous flame stream.
 
 ### Character (`src/StarterCharacterScripts/`)
@@ -49,7 +50,7 @@ A round-based Roblox tag-style game. One player starts "burning" and converts ot
 
 The `Remotes` folder lives in Studio (not Rojo source); it is preserved across syncs because `ReplicatedStorage` has `ignoreUnknownInstances: true`. Several remotes are **auto-created** by their owning system if missing (the `ensureRemote` pattern), so you don't have to author them in Studio.
 
-- `RoundStateChanged` (RemoteEvent) — server broadcasts `(phase, duration?, extra?)`. During `Reveal`, `extra` is `{ burner = name }`. During `Round`, `extra` is `{ stage = 1|2|3 }`. At `End`, `extra` is `{ winners = { name, ... }, reason }` — `winners` may be empty (everyone burned / aborted).
+- `RoundStateChanged` (RemoteEvent) — server broadcasts `(phase, duration?, extra?)`. During `RoleReveal` and `Reveal`, `extra` is `{ burner = name }` (same shape — clients use `extra.burner == localPlayer.Name` to derive `localIsBurner`). During `Round`, `extra` is `{ stage = 1|2|3 }`. At `End`, `extra` is `{ winners = { name, ... }, reason }` — `winners` may be empty (everyone burned / aborted).
 - `PlayerStateChanged` (RemoteEvent) — server broadcasts `(player, state)`.
 - `DashRequest` (RemoteEvent) — client → server.
 - `FireRequest` (RemoteEvent) — client → server `(active: bool)`. Burner press/release of LMB. Auto-created by `FireAttackSystem.init()`.
@@ -68,6 +69,7 @@ The `Remotes` folder lives in Studio (not Rojo source); it is preserved across s
 - `FuelMeter` (GuiObject) — fuel bar shown only while local player is `Burning`. Children: `BarBG.Fill` (sized 0..1 by `FireAttackController`) and `BarBG.EmptyOverlay` (visible while fuel is below `FIRE_FUEL_MIN_TO_START`).
 - `Vignette` (Frame) — full-screen damage overlay; `BackgroundTransparency` is tweened by `CombatFeedbackController` on every damage tick taken.
 - `Crosshair` (Frame) — small centered reticle; punched (size + color tween) by `CombatFeedbackController` on every confirmed hit landed.
+- `Role` (Frame) — role-reveal UI shown during `PHASE_ROLE_REVEAL`. Children: `Title` (TextLabel, static heading authored in Studio — never modified by code) and `ROLE` (TextLabel whose `.Text` and `.TextColor3` are cycled then settled by `RoleRevealController`). The frame's UIScale is created on first resolve if missing.
 
 ### Asset templates (`ReplicatedStorage.Assets.UI`)
 
@@ -75,13 +77,15 @@ The `Remotes` folder lives in Studio (not Rojo source); it is preserved across s
 
 ## Round Flow
 
-`Lobby → Intermission (10s) → Reveal (6s) → Round (90s, 3 × 30s stages) → End (5s) → Lobby`
+`Lobby → Intermission (10s) → RoleReveal (3.5s) → Reveal (10s) → Round (90s, 3 × 30s stages) → End (5s) → Lobby`
 
 `gameLoop` loads the map **before** broadcasting `Intermission`. If the map fails to load (no `ServerStorage.Maps`, or it's empty), it warns and stays in the `Lobby` phase instead of getting stuck cycling through intermission.
 
-**Reveal phase** is a no-damage grace window between teleport-to-arena and the actual round. The initial burner has been chosen and gets the visible fire + outline so everyone can see who they are; safe players use the time to position themselves. `FireAttackSystem`, `InfectionSystem`, and `FireSpreadSystem` are deliberately NOT started until reveal ends, so no damage, walls, ignition, or fuel drain can happen during it.
+**RoleReveal phase** is a per-player UI animation window. The burner has already been chosen and `setBurning` has been called (so they have fire + outline) before the phase broadcast. `RoleRevealController` cycles `Game.Role.ROLE` between SURVIVOR (#1BB420) and TAGGER (#FF383C), settles on the local player's actual role, then fades out. `CombatFeedbackController` deliberately does NOT activate burner mode (first-person lock + custom crosshair) during this phase to preserve the suspense.
 
-`endRound` order is important: stop all three damage systems (`FireAttackSystem`, `InfectionSystem`, `FireSpreadSystem`) → **heal everyone to MaxHealth** → teleport everyone to lobby → unload map → THEN broadcast `End` and wait `END_TIME`. The map disappears the instant the round ends; players watch the announcement from the lobby with full HP.
+**Reveal phase** is a no-damage, no-ability positioning window. Safe players use the time to position themselves; the burner is in first-person with their crosshair active. `FireAttackSystem`, `InfectionSystem`, `FireSpreadSystem`, and `AbilitySystem` are all deliberately NOT started until reveal ends, so no damage, walls, ignition, fuel drain, or dashing can happen during it.
+
+`endRound` order is important: stop all four active systems (`FireAttackSystem`, `InfectionSystem`, `FireSpreadSystem`, `AbilitySystem`) → **heal everyone to MaxHealth** → teleport everyone to lobby → unload map → THEN broadcast `End` and wait `END_TIME`. The map disappears the instant the round ends; players watch the announcement from the lobby with full HP.
 
 The round does **not** end early when only one safe player remains — the timer must run out. A round only ends early if (a) every safe player is converted (`AllInfected`), or (b) the player count drops below `MIN_PLAYERS` (`Aborted`). When the timer runs out, **every** remaining safe player is a winner.
 
@@ -173,14 +177,17 @@ Both deal `HAZARD_DAMAGE_PER_SEC` (half of direct burner damage). `InfectionSyst
 In Studio, use **Test → Local Server → 2 Players** for end-to-end testing. To shorten iteration, temporarily lower `STAGE_DURATION` and `ROUND_TIME` in `Constants.luau`.
 
 Quick smoke checklist after changes:
-1. Round starts, Status frame shows "STAGE 1/3 — TAG" → "STAGE 2/3 — TRAILS" → "STAGE 3/3 — INFERNO" at the right times (color shifts yellow → orange → red).
-2. Secondary frame shows `1:30  |  2/3` (timer flips red below 30s; alive count excludes self).
-3. As a burner, holding LMB spawns a flame cone in front of the torso, drains the `FuelMeter` bar over ~3s, and force-stops at 0; releasing LMB regens the bar at the same rate. Cone-tagging a safe player drains their HP at ~18 HP/s (~5.5s to convert from full HP).
-4. As a victim, taking damage shows a vignette pulse + light camera shake; the screen does NOT shake while you're not being hit. Damage numbers float up over the victim's head with color graded by tick size. The `Crosshair` punches outward on the burner's HUD when their cone connects.
-5. HP hitting 0 swaps the player to burning — no death animation, no respawn. Kill feed shows `"Killer burned Victim"` for cone kills, `"Victim burned"` for hazard kills.
-6. Stage 2: tall fire walls trail behind moving burners and stay around for ~5 seconds; safe players who walk into one take ~5 HP/s. A safe player simultaneously in a wall AND a cone takes the cone tick, not both.
-7. Stage 3: burner brushes a prop → prop ignites with flames visible on **every face** and stays burning for the rest of the round; brushes a wall with a `Fireproof` `BoolValue` child (`Value = true`) → nothing.
-8. All burners visibly outlined orange (visible through walls). The `FuelMeter` is hidden for safe players and visible for burners.
-9. Round end clears all trail walls, ignited fires, hazard folder, flame attachments, **and the cloned map** (`Workspace.LoadedMap` is gone). All players are at full HP back in the lobby.
+1. After intermission, the `Role` frame pops up (UIScale entrance), `ROLE` cycles SURVIVOR (green) ↔ TAGGER (red), settles on the correct role per player, fades out. Status / secondary banners are blank during this window. Burner stays in third-person during the animation.
+2. After the role reveal fades out, the 10s positioning window begins. Status shows "<NAME> IS BURNING!", secondary shows "Position yourself! 10s". The burner's camera locks to first-person and the custom crosshair appears at this point. Pressing Q does **not** dash; LMB does **not** spawn a flame stream.
+3. Round starts, Status frame shows "STAGE 1/3 — TAG" → "STAGE 2/3 — TRAILS" → "STAGE 3/3 — INFERNO" at the right times (color shifts yellow → orange → red). Dash and flamethrower work normally.
+4. Secondary frame shows `1:30  |  2/3` (timer flips red below 30s; alive count excludes self).
+5. As a burner, holding LMB spawns a flame cone in front of the torso, drains the `FuelMeter` bar over ~3s, and force-stops at 0; releasing LMB regens the bar at the same rate. Cone-tagging a safe player drains their HP at ~18 HP/s (~5.5s to convert from full HP).
+6. As a victim, taking damage shows a vignette pulse + light camera shake; the screen does NOT shake while you're not being hit. Damage numbers stream out over the victim's head every ~0.25s while damage is landing.
+7. HP hitting 0 swaps the player to burning — no death animation, no respawn. Kill feed shows `"Killer burned Victim"` for cone kills, `"Victim burned"` for hazard kills.
+8. Stage 2: tall fire walls trail behind moving burners and stay around for ~5 seconds; safe players who walk into one take ~5 HP/s. A safe player simultaneously in a wall AND a cone takes the cone tick, not both.
+9. Stage 3: burner brushes a prop → prop ignites with flames visible on **every face** and stays burning for the rest of the round; brushes a wall with a `Fireproof` `BoolValue` child (`Value = true`) → nothing.
+10. All burners visibly outlined orange (visible through walls). The `FuelMeter` is hidden for safe players and visible for burners.
+11. Round end clears all trail walls, ignited fires, hazard folder, flame attachments, **and the cloned map** (`Workspace.LoadedMap` is gone). All players are at full HP back in the lobby. Camera returns to Classic, default cursor returns, the `Role` frame is hidden.
+12. Start a second round: dash works once STAGE 1 begins (no stale cooldown carrying from the previous round).
 
 If you start the server and immediately hear the intermission countdown loop forever, check Output for `MapManager: ServerStorage.Maps ...` warnings — that's the cause.

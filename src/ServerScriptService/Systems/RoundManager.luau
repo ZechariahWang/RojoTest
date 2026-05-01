@@ -6,6 +6,7 @@ local PlayerState = require(script.Parent.PlayerState)
 local InfectionSystem = require(script.Parent.InfectionSystem)
 local FireAttackSystem = require(script.Parent.FireAttackSystem)
 local FireSpreadSystem = require(script.Parent.FireSpreadSystem)
+local AbilitySystem = require(script.Parent.AbilitySystem)
 local MapManager = require(script.Parent.MapManager)
 
 local RoundManager = {}
@@ -138,6 +139,7 @@ local function endRound(reason: string, winners: { string })
 	FireAttackSystem.stop()
 	InfectionSystem.stop()
 	FireSpreadSystem.stop()
+	AbilitySystem.stop()
 	currentStage = 0
 
 	healAllPlayers()
@@ -194,8 +196,15 @@ local function runRound()
 	end
 	setBurning(initialBurner, false)
 
-	-- Reveal phase: burner is visible (fire + outline), but InfectionSystem and
-	-- FireSpreadSystem are NOT running yet, so no damage. Everyone gets to position.
+	-- Role reveal phase: clients animate the per-player role UI. No damage, no
+	-- abilities. Burner already has fire + outline so they appear ignited
+	-- when the animation settles.
+	broadcastPhase(Constants.PHASE_ROLE_REVEAL, Constants.ROLE_REVEAL_TIME, {
+		burner = initialBurner.Name,
+	})
+	task.wait(Constants.ROLE_REVEAL_TIME)
+
+	-- Reveal phase: positioning countdown. Damage and abilities still off.
 	broadcastPhase(Constants.PHASE_REVEAL, Constants.REVEAL_TIME, {
 		burner = initialBurner.Name,
 	})
@@ -211,6 +220,7 @@ local function runRound()
 	InfectionSystem.start()
 	FireSpreadSystem.start()
 	FireAttackSystem.start()
+	AbilitySystem.start()
 
 	local roundStart = os.clock()
 	local roundEnd = roundStart + Constants.ROUND_TIME

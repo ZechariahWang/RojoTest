@@ -78,9 +78,9 @@ local function pulseVignette(intensity: number)
 	end)
 end
 
-local CROSSHAIR_IDLE_SIZE = UDim2.fromOffset(10, 10)
-local CROSSHAIR_FIRING_SIZE = UDim2.fromOffset(22, 22)
-local CROSSHAIR_IDLE_COLOR = Color3.fromRGB(255, 200, 140)
+local CROSSHAIR_IDLE_SIZE = UDim2.fromOffset(4, 4)
+local CROSSHAIR_FIRING_SIZE = UDim2.fromOffset(8, 8)
+local CROSSHAIR_IDLE_COLOR = Color3.fromRGB(187, 102, 12)
 local CROSSHAIR_FIRING_COLOR = Color3.fromRGB(255, 80, 30)
 local CROSSHAIR_IDLE_TRANSPARENCY = 0.5
 local CROSSHAIR_FIRING_TRANSPARENCY = 0
@@ -88,6 +88,17 @@ local CROSSHAIR_TWEEN_TIME = 0.12
 
 local isBurner = false
 local isFiring = false
+local burnerModeActive = false
+local currentPhase: string = Constants.PHASE_LOBBY
+
+local function shouldBurnerModeBeActive(): boolean
+	-- Burner mode is the first-person camera lock + custom crosshair. It is
+	-- deliberately deferred until after PHASE_ROLE_REVEAL so locking the camera
+	-- doesn't spoil the role-reveal animation. It's also off in lobby/end so the
+	-- player can scroll their camera around while waiting.
+	if not isBurner then return false end
+	return currentPhase == Constants.PHASE_REVEAL or currentPhase == Constants.PHASE_ROUND
+end
 
 local function applyCrosshairFiring(firing: boolean)
 	if not crosshair then return end
@@ -123,8 +134,8 @@ local function setBurnerMode(active: boolean)
 end
 
 
-local DAMAGE_BATCH_WINDOW = 0.25
-local pendingDamage: { [Player]: { total: number, expireAt: number } } = {}
+local DAMAGE_FLUSH_INTERVAL = 0.25
+local pendingDamage: { [Player]: { total: number, nextFlushAt: number } } = {}
 local HIT_CONFIRM_THROTTLE = 0.08
 local lastHitConfirmAt = -math.huge
 
@@ -205,13 +216,20 @@ local function spawnDamageNumber(victim: Player, dmg: number)
 end
 
 local function damageNumberStep(_dt: number)
+	-- Flush each victim's accumulated damage every DAMAGE_FLUSH_INTERVAL while
+	-- damage is still streaming in. If a flush interval passes with no new
+	-- damage (total == 0), the entry is cleaned up.
 	local now = os.clock()
 	for victim, entry in pendingDamage do
-		if now >= entry.expireAt then
-			pendingDamage[victim] = nil
+		if now < entry.nextFlushAt then continue end
+		if entry.total > 0 then
 			if victim.Parent then
 				spawnDamageNumber(victim, entry.total)
 			end
+			entry.total = 0
+			entry.nextFlushAt = now + DAMAGE_FLUSH_INTERVAL
+		else
+			pendingDamage[victim] = nil
 		end
 	end
 end
@@ -296,9 +314,8 @@ local function onDamageDealt(victim: Player, dmg: number, _victimHP: number)
 	local entry = pendingDamage[victim]
 	if entry then
 		entry.total += dmg
-		entry.expireAt = now + DAMAGE_BATCH_WINDOW
 	else
-		pendingDamage[victim] = { total = dmg, expireAt = now + DAMAGE_BATCH_WINDOW }
+		pendingDamage[victim] = { total = dmg, nextFlushAt = now + DAMAGE_FLUSH_INTERVAL }
 	end
 end
 
@@ -327,10 +344,18 @@ local function onCharacterAdded(_char: Model)
 	shakeIntensity = 0
 end
 
+local function reconcileBurnerMode()
+	local desired = shouldBurnerModeBeActive()
+	if desired == burnerModeActive then return end
+	burnerModeActive = desired
+	setBurnerMode(desired)
+end
+
 function CombatFeedbackController.init()
 
 	initHUD()
-	-- Burner mode + custom crosshair are off until the local player is Burning.
+	-- Burner mode + custom crosshair are off until the local player is Burning
+	-- and the role-reveal animation has finished.
 	setBurnerMode(false)
 
 	local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -338,6 +363,7 @@ function CombatFeedbackController.init()
 	local DamageTakenRemote = Remotes:WaitForChild("DamageTaken") :: RemoteEvent
 	local KillFeedRemote = Remotes:WaitForChild("KillFeed") :: RemoteEvent
 	local PlayerStateRemote = Remotes:WaitForChild("PlayerStateChanged") :: RemoteEvent
+	local RoundStateRemote = Remotes:WaitForChild("RoundStateChanged") :: RemoteEvent
 
 	DamageDealtRemote.OnClientEvent:Connect(onDamageDealt)
 	DamageTakenRemote.OnClientEvent:Connect(onDamageTaken)
@@ -345,15 +371,18 @@ function CombatFeedbackController.init()
 
 	PlayerStateRemote.OnClientEvent:Connect(function(player: Player, state: string)
 		if player ~= localPlayer then return end
-		local nowBurner = state == Constants.STATE_BURNING
-		if nowBurner == isBurner then return end
-		isBurner = nowBurner
-		setBurnerMode(nowBurner)
+		isBurner = state == Constants.STATE_BURNING
+		reconcileBurnerMode()
+	end)
+
+	RoundStateRemote.OnClientEvent:Connect(function(phase: string)
+		currentPhase = phase
+		reconcileBurnerMode()
 	end)
 
 	UserInputService.InputBegan:Connect(function(input, gpe)
 		if gpe then return end
-		if not isBurner then return end
+		if not burnerModeActive then return end
 		if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
 		if isFiring then return end
 		isFiring = true

@@ -3,7 +3,8 @@ local Constants = {}
 -- ROUND
 Constants.MIN_PLAYERS = 2
 Constants.INTERMISSION_TIME = 10
-Constants.REVEAL_TIME = 6 -- post-teleport grace: announce burner, let players position. No damage.
+Constants.ROLE_REVEAL_TIME = 3.5 -- role-reveal UI animation window (no actions allowed)
+Constants.REVEAL_TIME = 10 -- post-role-reveal positioning grace. No damage, no abilities.
 Constants.ROUND_TIME = 90
 Constants.END_TIME = 5
 
@@ -23,20 +24,20 @@ Constants.FIRE_FUEL_REGEN_PER_SEC = 1.0
 Constants.FIRE_FUEL_MIN_TO_START = 0.3    -- prevents tap-spam at empty
 
 -- DAMAGE (passive hazard — trail walls, ignited parts)
-Constants.HAZARD_DAMAGE_PER_SEC = 5
+Constants.HAZARD_DAMAGE_PER_SEC = 10
 
 -- TRAIL (Stage 2+)
 Constants.TRAIL_DURATION = 5
 Constants.TRAIL_RADIUS = 3 -- distance from wall surface that still counts as "touching"
 Constants.TRAIL_WALL_HEIGHT = 6
-Constants.TRAIL_WALL_THICKNESS = 0.6
+Constants.TRAIL_WALL_THICKNESS = 0.2
 Constants.TRAIL_SEGMENT_MIN_LENGTH = 1.5 -- min movement before dropping a new wall segment
 Constants.TRAIL_SEGMENT_MAX_LENGTH = 10 -- larger movement (teleport / dash skip) drops no segment
 
 -- IGNITE (Stage 3)
 Constants.IGNITE_RADIUS = 5
 
--- FIREPROOF FLAG (BoolValue child on a part — set Value = true to opt out of ignition)
+-- FIREPROOF FLAG 
 Constants.FIREPROOF_FLAG_NAME = "Fireproof"
 
 -- MOVEMENT
@@ -56,9 +57,14 @@ Constants.STATE_BURNING = "Burning"
 -- ROUND PHASES
 Constants.PHASE_LOBBY = "Lobby"
 Constants.PHASE_INTERMISSION = "Intermission"
+Constants.PHASE_ROLE_REVEAL = "RoleReveal"
 Constants.PHASE_REVEAL = "Reveal"
 Constants.PHASE_ROUND = "Round"
 Constants.PHASE_END = "End"
+
+-- ROLE REVEAL UI COLORS
+Constants.SURVIVOR_COLOR = Color3.fromRGB(27, 180, 32)   -- #1BB420
+Constants.TAGGER_COLOR = Color3.fromRGB(255, 56, 60)     -- #FF383C
 
 -- END REASONS
 Constants.REASON_SURVIVED = "Survived"

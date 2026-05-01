@@ -6,10 +6,12 @@ local PlayerState = require(script.Parent.PlayerState)
 
 local AbilitySystem = {}
 
+local active = false
 local lastDash: { [Player]: number } = {}
 local DashRequestRemote: RemoteEvent
 
 local function dash(player: Player)
+	if not active then return end
 	if PlayerState.get(player) ~= Constants.STATE_SAFE then
 		return
 	end
@@ -50,6 +52,16 @@ local function dash(player: Player)
 		if lv and lv.Parent then lv:Destroy() end
 		if attachment and attachment.Parent then attachment:Destroy() end
 	end)
+end
+
+function AbilitySystem.start()
+	active = true
+	-- Stale cooldowns from a previous round shouldn't carry over.
+	table.clear(lastDash)
+end
+
+function AbilitySystem.stop()
+	active = false
 end
 
 function AbilitySystem.init()

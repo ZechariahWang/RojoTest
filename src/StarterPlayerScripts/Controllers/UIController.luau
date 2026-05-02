@@ -21,9 +21,9 @@ local currentStage = 0
 local playerStates: { [Player]: string } = {}
 
 local WHITE = Color3.fromRGB(240, 240, 240)
-local YELLOW = Color3.fromRGB(255, 220, 80)
-local ORANGE = Color3.fromRGB(255, 150, 40)
-local RED = Color3.fromRGB(255, 80, 60)
+local YELLOW = Color3.fromRGB(255, 159, 80)
+local ORANGE = Color3.fromRGB(240, 90, 3)
+local RED = Color3.fromRGB(255, 25, 0)
 local GREEN = Color3.fromRGB(80, 220, 80)
 local CYAN = Color3.fromRGB(120, 220, 255)
 

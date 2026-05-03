@@ -1,10 +1,19 @@
 --!strict
--- Weapon registry. Each weapon module returns a WeaponDef table; see
--- Flamethrower.luau for the field shape. Add a new weapon by dropping a sibling
--- module here and listing it below.
+-- Weapon registry. Auto-discovers every sibling ModuleScript and exposes them
+-- by name. Drop a new module in this folder and it's available immediately —
+-- no manual registration needed. See Flamethrower.luau for the field shape.
 
-local Weapons = {}
+local Weapons: { [string]: any } = {}
 
-Weapons.Flamethrower = require(script:WaitForChild("Flamethrower"))
+for _, child in ipairs(script:GetChildren()) do
+	if child:IsA("ModuleScript") then
+		local ok, mod = pcall(require, child)
+		if ok and type(mod) == "table" then
+			Weapons[child.Name] = mod
+		else
+			warn("Weapons registry: failed to load " .. child.Name .. ": " .. tostring(mod))
+		end
+	end
+end
 
 return Weapons

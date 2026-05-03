@@ -1,11 +1,20 @@
 --!strict
--- Projectile registry. Each projectile module exposes:
+-- Projectile registry. Auto-discovers every sibling ModuleScript. Each module
+-- exposes:
 --   .name : string
 --   .start(muzzle: Instance) : { stop: (self) -> () }
--- Add a new projectile by dropping a sibling module here and listing it below.
 
-local Projectiles = {}
+local Projectiles: { [string]: any } = {}
 
-Projectiles.Flame = require(script:WaitForChild("Flame"))
+for _, child in ipairs(script:GetChildren()) do
+	if child:IsA("ModuleScript") then
+		local ok, mod = pcall(require, child)
+		if ok and type(mod) == "table" then
+			Projectiles[child.Name] = mod
+		else
+			warn("Projectiles registry: failed to load " .. child.Name .. ": " .. tostring(mod))
+		end
+	end
+end
 
 return Projectiles

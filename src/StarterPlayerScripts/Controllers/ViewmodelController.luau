@@ -19,13 +19,24 @@ local STEP_KEY = "ViewmodelController_Step"
 
 type ProjectileHandle = { stop: (any) -> () }
 type EquipState = {
+	-- ViewportFrame layer (renders the arms on top of the world, no clipping).
+	screenGui: ScreenGui,
+	viewportFrame: ViewportFrame,
+	viewportCamera: Camera,
+	worldModel: WorldModel,
+
 	viewmodel: Model,
 	weaponDef: any,
 	weaponModel: Model?,
-	weaponMotor: Motor6D?,
-	muzzle: Instance,
-	hiddenServerEmitter: ParticleEmitter?, -- the local burner's torso flame, hidden while we own the screen
-	savedFOV: number,
+
+	-- The muzzle inside the viewport (visual position). ParticleEmitters can't
+	-- render in a ViewportFrame, so we mirror this CFrame onto a workspace
+	-- tracker each frame, and the projectile spawns on the tracker.
+	internalMuzzle: Instance,
+	muzzleTracker: BasePart,
+	trackerMuzzle: Attachment,
+
+	hiddenServerEmitter: ParticleEmitter?,
 	swayCF: CFrame,
 	bobOffset: CFrame,
 	lastCameraCF: CFrame,
@@ -54,6 +65,14 @@ local function findLocalTorsoEmitter(): ParticleEmitter?
 	return attachment:FindFirstChild("FlamethrowerStream") :: ParticleEmitter?
 end
 
+local function lockPart(p: BasePart)
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Massless = true
+end
+
 local function ensureFallbackMuzzle(rightArm: BasePart, weaponDef: any): Attachment
 	local existing = rightArm:FindFirstChild(weaponDef.muzzleAttachmentName)
 	if existing and existing:IsA("Attachment") then
@@ -66,7 +85,9 @@ local function ensureFallbackMuzzle(rightArm: BasePart, weaponDef: any): Attachm
 	return att
 end
 
-local function equipWeapon(viewmodel: Model, weaponDef: any): (Model?, Motor6D?, Instance)
+-- Position weapon model relative to the right arm (rigid offset preserved by
+-- viewmodel:PivotTo each frame). Returns the internal muzzle reference.
+local function equipWeapon(viewmodel: Model, weaponDef: any): (Model?, Instance)
 	local rightArm = viewmodel:FindFirstChild("RightArm") :: BasePart?
 	if not rightArm then
 		error("ViewmodelController: viewmodel is missing RightArm")
@@ -76,35 +97,25 @@ local function equipWeapon(viewmodel: Model, weaponDef: any): (Model?, Motor6D?,
 	local template = weaponsFolder and weaponsFolder:FindFirstChild(weaponDef.modelName)
 
 	if not template or not template:IsA("Model") then
-		-- Fallback: no weapon model authored yet. Just attach a muzzle to RightArm.
-		return nil, nil, ensureFallbackMuzzle(rightArm, weaponDef)
+		return nil, ensureFallbackMuzzle(rightArm, weaponDef)
 	end
 
 	local weaponModel = template:Clone()
 	local primary = weaponModel.PrimaryPart or weaponModel:FindFirstChildWhichIsA("BasePart")
 	if not primary then
 		weaponModel:Destroy()
-		return nil, nil, ensureFallbackMuzzle(rightArm, weaponDef)
+		return nil, ensureFallbackMuzzle(rightArm, weaponDef)
 	end
 	weaponModel.PrimaryPart = primary
 
 	for _, descendant in ipairs(weaponModel:GetDescendants()) do
 		if descendant:IsA("BasePart") then
-			descendant.CanCollide = false
-			descendant.CanQuery = false
-			descendant.CanTouch = false
-			descendant.Massless = true
+			lockPart(descendant)
 		end
 	end
 
-	local motor = Instance.new("Motor6D")
-	motor.Name = "WeaponGrip"
-	motor.Part0 = rightArm
-	motor.Part1 = primary
-	motor.C0 = weaponDef.rightHandGrip or CFrame.new()
-	motor.Parent = rightArm
-
 	weaponModel.Parent = viewmodel
+	weaponModel:PivotTo(rightArm.CFrame * (weaponDef.rightHandGrip or CFrame.new()))
 
 	local muzzle: Instance? = primary:FindFirstChild(weaponDef.muzzleAttachmentName)
 	if not muzzle then
@@ -114,7 +125,7 @@ local function equipWeapon(viewmodel: Model, weaponDef: any): (Model?, Motor6D?,
 		muzzle = ensureFallbackMuzzle(rightArm, weaponDef)
 	end
 
-	return weaponModel, motor, muzzle :: Instance
+	return weaponModel, muzzle :: Instance
 end
 
 local function detach()
@@ -129,22 +140,15 @@ local function detach()
 	if s.projectile then
 		s.projectile:stop()
 	end
-	if s.weaponMotor and s.weaponMotor.Parent then
-		s.weaponMotor:Destroy()
+	if s.muzzleTracker and s.muzzleTracker.Parent then
+		s.muzzleTracker:Destroy()
 	end
-	if s.weaponModel and s.weaponModel.Parent then
-		s.weaponModel:Destroy()
-	end
-	if s.viewmodel and s.viewmodel.Parent then
-		s.viewmodel:Destroy()
+	if s.screenGui and s.screenGui.Parent then
+		s.screenGui:Destroy() -- destroys ViewportFrame, WorldModel, Viewmodel, weapon
 	end
 
 	if s.hiddenServerEmitter and s.hiddenServerEmitter.Parent then
 		s.hiddenServerEmitter.Enabled = true
-	end
-
-	if camera then
-		camera.FieldOfView = s.savedFOV
 	end
 end
 
@@ -162,14 +166,53 @@ local function getViewmodelTemplate(): Model?
 	return template
 end
 
+local function buildViewportLayer(): (ScreenGui, ViewportFrame, WorldModel, Camera)
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "ViewmodelLayer"
+	screenGui.ResetOnSpawn = false
+	screenGui.IgnoreGuiInset = true
+	-- Drawn behind the HUD (which sits at default DisplayOrder = 0) so the
+	-- crosshair, fuel meter, etc. overlay the arms.
+	screenGui.DisplayOrder = -1
+	screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+
+	local viewportFrame = Instance.new("ViewportFrame")
+	viewportFrame.Name = "Viewport"
+	viewportFrame.Size = UDim2.fromScale(1, 1)
+	viewportFrame.BackgroundTransparency = 1
+	viewportFrame.LightColor = Color3.fromRGB(255, 240, 230)
+	viewportFrame.LightDirection = Vector3.new(-1, -2, 1)
+	viewportFrame.Ambient = Color3.fromRGB(140, 140, 140)
+	viewportFrame.Parent = screenGui
+
+	-- WorldModel inherits from WorldRoot, so motors / animations work inside
+	-- (we anchor everything in v1, but this keeps the door open for animation).
+	local worldModel = Instance.new("WorldModel")
+	worldModel.Name = "ViewmodelWorld"
+	worldModel.Parent = viewportFrame
+
+	local viewportCamera = Instance.new("Camera")
+	viewportCamera.Name = "ViewmodelCamera"
+	viewportCamera.FieldOfView = Constants.VIEWMODEL_FOV
+	viewportCamera.Parent = viewportFrame
+	viewportFrame.CurrentCamera = viewportCamera
+
+	return screenGui, viewportFrame, worldModel, viewportCamera
+end
+
 local function attach()
 	if equipped then return end
 
 	local template = getViewmodelTemplate()
 	if not template then return end
 
-	local viewmodel = template:Clone()
+	local weaponDef = Weapons[currentWeaponName] or Weapons[Constants.VIEWMODEL_DEFAULT_WEAPON]
+	if not weaponDef then
+		warn("ViewmodelController: no weapon registered named " .. tostring(currentWeaponName))
+		return
+	end
 
+	local viewmodel = template:Clone()
 	local hrp = viewmodel:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp then
 		warn("ViewmodelController: viewmodel has no HumanoidRootPart")
@@ -178,58 +221,59 @@ local function attach()
 	end
 	viewmodel.PrimaryPart = hrp
 
-	-- Viewmodel is decorative-only: must not collide, raycast, or fight physics.
 	for _, descendant in ipairs(viewmodel:GetDescendants()) do
 		if descendant:IsA("BasePart") then
-			descendant.CanCollide = false
-			descendant.CanQuery = false
-			descendant.CanTouch = false
-			descendant.Massless = true
+			lockPart(descendant)
 		end
 	end
-	hrp.Anchored = true
 
-	viewmodel.Parent = camera
+	local screenGui, viewportFrame, worldModel, viewportCamera = buildViewportLayer()
+	viewmodel.Parent = worldModel
 
-	local weaponDef = Weapons[currentWeaponName] or Weapons[Constants.VIEWMODEL_DEFAULT_WEAPON]
-	if not weaponDef then
-		warn("ViewmodelController: no weapon registered named " .. tostring(currentWeaponName))
-		viewmodel:Destroy()
-		return
-	end
+	local weaponModel, internalMuzzle = equipWeapon(viewmodel, weaponDef)
 
-	local weaponModel, weaponMotor, muzzle = equipWeapon(viewmodel, weaponDef)
+	-- The workspace tracker carries the ParticleEmitter (which doesn't render
+	-- inside a ViewportFrame). Each frame, its CFrame mirrors the visual world
+	-- CFrame of the in-viewport muzzle, so the flame appears at the right spot.
+	local muzzleTracker = Instance.new("Part")
+	muzzleTracker.Name = "ViewmodelMuzzleTracker"
+	muzzleTracker.Size = Vector3.new(0.1, 0.1, 0.1)
+	muzzleTracker.Transparency = 1
+	lockPart(muzzleTracker)
+	muzzleTracker.Parent = Workspace.CurrentCamera
 
-	-- Hide the local burner's third-person torso flame so it doesn't clip the camera
-	-- while we own the first-person view. We keep the ref to re-enable on detach.
+	local trackerMuzzle = Instance.new("Attachment")
+	trackerMuzzle.Name = weaponDef.muzzleAttachmentName
+	trackerMuzzle.Parent = muzzleTracker
+
 	local hiddenEmitter: ParticleEmitter? = findLocalTorsoEmitter()
 	if hiddenEmitter then
 		hiddenEmitter.Enabled = false
 	end
 
-	local savedFOV = camera.FieldOfView
-	camera.FieldOfView = Constants.VIEWMODEL_FOV
-
 	equipped = {
+		screenGui = screenGui,
+		viewportFrame = viewportFrame,
+		viewportCamera = viewportCamera,
+		worldModel = worldModel,
 		viewmodel = viewmodel,
 		weaponDef = weaponDef,
 		weaponModel = weaponModel,
-		weaponMotor = weaponMotor,
-		muzzle = muzzle,
+		internalMuzzle = internalMuzzle,
+		muzzleTracker = muzzleTracker,
+		trackerMuzzle = trackerMuzzle,
 		hiddenServerEmitter = hiddenEmitter,
-		savedFOV = savedFOV,
 		swayCF = CFrame.new(),
 		bobOffset = CFrame.new(),
 		lastCameraCF = camera.CFrame,
 		projectile = nil,
 	}
 
-	RunService:BindToRenderStep(STEP_KEY, Enum.RenderPriority.Character.Value + 1, function(dt: number)
+	RunService:BindToRenderStep(STEP_KEY, Enum.RenderPriority.Character.Value + 1, function(_dt: number)
 		local e = equipped
 		if not e then return end
 		if not e.viewmodel.Parent then return end
 
-		-- Sway: respond to camera angular velocity for a tiny weight feel.
 		local rot = camera.CFrame:ToObjectSpace(e.lastCameraCF)
 		local rx, ry, _ = rot:ToOrientation()
 		local targetSway = CFrame.Angles(
@@ -240,7 +284,6 @@ local function attach()
 		e.swayCF = e.swayCF:Lerp(targetSway, Constants.VIEWMODEL_SWAY_LERP)
 		e.lastCameraCF = camera.CFrame
 
-		-- Bob: tied to humanoid movement. Half-frequency on Y so the figure-8 reads correctly.
 		local char = localPlayer.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		local moving = hum and hum.MoveDirection.Magnitude > 0
@@ -257,11 +300,23 @@ local function attach()
 		end
 		e.bobOffset = e.bobOffset:Lerp(targetBob, Constants.VIEWMODEL_BOB_LERP)
 
-		hrp.CFrame = camera.CFrame * e.swayCF * e.bobOffset
+		-- Pivot the whole viewmodel (arms + weapon, all anchored) as a rigid body.
+		local pivot = camera.CFrame * e.swayCF * e.bobOffset
+		e.viewmodel:PivotTo(pivot)
 
-		-- The server torso emitter is recreated on every fire-start, so the ref we
-		-- captured during attach() can go stale. Re-find and silence it whenever
-		-- it reappears so it never clips the camera in first-person.
+		-- Mirror viewport camera to main camera so the rendered POV matches.
+		e.viewportCamera.CFrame = camera.CFrame
+
+		-- Tracker follows the visual muzzle so the workspace particle emitter
+		-- spawns at the same on-screen position as the in-viewport muzzle.
+		if e.internalMuzzle and e.internalMuzzle.Parent then
+			if e.internalMuzzle:IsA("Attachment") then
+				e.muzzleTracker.CFrame = e.internalMuzzle.WorldCFrame
+			elseif e.internalMuzzle:IsA("BasePart") then
+				e.muzzleTracker.CFrame = e.internalMuzzle.CFrame
+			end
+		end
+
 		if not e.hiddenServerEmitter or not e.hiddenServerEmitter.Parent then
 			local found = findLocalTorsoEmitter()
 			if found then
@@ -291,7 +346,9 @@ local function onFireStateChanged(active: boolean)
 			warn("ViewmodelController: no projectile named " .. tostring(equipped.weaponDef.projectileName))
 			return
 		end
-		equipped.projectile = projectile.start(equipped.muzzle)
+		-- Particles spawn on the workspace tracker, not the in-viewport muzzle,
+		-- because ViewportFrame doesn't render ParticleEmitters.
+		equipped.projectile = projectile.start(equipped.trackerMuzzle)
 	else
 		if equipped.projectile then
 			equipped.projectile:stop()
@@ -337,7 +394,6 @@ function ViewmodelController.init()
 
 	FireAttackController.FireStateChanged:Connect(onFireStateChanged)
 
-	-- Detach cleanly on respawn so the next attach starts fresh.
 	localPlayer.CharacterRemoving:Connect(function()
 		if equipped then detach() end
 	end)

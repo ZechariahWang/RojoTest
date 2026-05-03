@@ -4,6 +4,7 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 
 local Constants = require(ReplicatedStorage.Shared.Constants)
+local RoleRevealController = require(script.Parent.RoleRevealController)
 
 local FireAttackController = {}
 
@@ -11,11 +12,14 @@ local localPlayer = Players.LocalPlayer
 local FireRequestRemote: RemoteEvent
 local FuelChangedRemote: RemoteEvent
 local PlayerStateRemote: RemoteEvent
+local RoundStateRemote: RemoteEvent
 
 local isBurning = false
 local isHolding = false
 local fuel = Constants.FIRE_FUEL_MAX
 local fuelMax = Constants.FIRE_FUEL_MAX
+local revealBlocking = false
+local currentPhase: string = Constants.PHASE_LOBBY
 
 local playerGui: PlayerGui
 local container: GuiObject?
@@ -73,6 +77,10 @@ local function setHudVisible(visible: boolean)
 	container.Visible = visible
 end
 
+local function reconcileMeterVisibility()
+	setHudVisible(isBurning and not revealBlocking)
+end
+
 local function sendFireRequest(active: boolean)
 	if isHolding == active then return end
 	isHolding = active
@@ -95,7 +103,10 @@ local function onLocalStateChanged(newState: string)
 	local nowBurning = (newState == Constants.STATE_BURNING)
 	if nowBurning == isBurning then return end
 	isBurning = nowBurning
-	setHudVisible(nowBurning)
+	if nowBurning and currentPhase ~= Constants.PHASE_REVEAL and currentPhase ~= Constants.PHASE_ROUND then
+		revealBlocking = true
+	end
+	reconcileMeterVisibility()
 	if not nowBurning then
 		stopHold()
 	end
@@ -104,7 +115,6 @@ end
 function FireAttackController.init()
 	playerGui = localPlayer:WaitForChild("PlayerGui")
 
-	-- Hide the authored meter until the player becomes Burning.
 	setHudVisible(false)
 	updateMeter()
 
@@ -112,6 +122,22 @@ function FireAttackController.init()
 	FireRequestRemote = Remotes:WaitForChild("FireRequest") :: RemoteEvent
 	FuelChangedRemote = Remotes:WaitForChild("FuelChanged") :: RemoteEvent
 	PlayerStateRemote = Remotes:WaitForChild("PlayerStateChanged") :: RemoteEvent
+	RoundStateRemote = Remotes:WaitForChild("RoundStateChanged") :: RemoteEvent
+
+	revealBlocking = RoleRevealController.isRevealActive()
+
+	RoundStateRemote.OnClientEvent:Connect(function(phase: string)
+		currentPhase = phase
+		if phase == Constants.PHASE_ROLE_REVEAL then
+			revealBlocking = true
+			reconcileMeterVisibility()
+		end
+	end)
+
+	RoleRevealController.RevealEnded:Connect(function()
+		revealBlocking = false
+		reconcileMeterVisibility()
+	end)
 
 	UserInputService.InputBegan:Connect(function(input, gpe)
 		if gpe then return end

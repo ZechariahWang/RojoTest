@@ -20,6 +20,7 @@ local gen = 0
 local lastSeenStage = 0
 local localState: string = Constants.STATE_LOBBY
 local currentPhase: string = Constants.PHASE_LOBBY
+local playerStates: { [Player]: string } = {}
 
 local ENTRANCE_TIME = 0.3
 local EXIT_TIME = 0.5
@@ -113,8 +114,8 @@ local function playTag()
 	end
 	assert(frame and titleLabel and infoLabel and frameScale and cachedInfoPosition)
 
-	titleLabel.Text = "TAGGED"
-	titleLabel.TextColor3 = Constants.TAGGER_COLOR
+	titleLabel.Text = "ELIMINATED"
+	titleLabel.TextColor3 = Constants.WHITE
 	infoLabel.Text = "SURVIVOR"
 	infoLabel.TextColor3 = Constants.SURVIVOR_COLOR
 	infoLabel.Position = cachedInfoPosition
@@ -183,7 +184,7 @@ local function playStage(stageNum: number)
 	local desc = STAGE_DESCRIPTIONS[stageNum] or ""
 
 	titleLabel.Text = "STAGE " .. tostring(stageNum)
-	titleLabel.TextColor3 = color
+	titleLabel.TextColor3 = Constants.WHITE
 	infoLabel.Text = desc
 	infoLabel.TextColor3 = color
 	infoLabel.Position = cachedInfoPosition
@@ -235,12 +236,27 @@ function ChangeIndicatorController.init()
 	end)
 
 	PlayerStateRemote.OnClientEvent:Connect(function(player: Player, state: string)
+		playerStates[player] = state
 		if player ~= localPlayer then return end
 		local prev = localState
 		localState = state
-		if prev == Constants.STATE_SAFE and state == Constants.STATE_BURNING then
-			task.spawn(playTag)
+		if prev ~= Constants.STATE_SAFE or state ~= Constants.STATE_BURNING then return end
+		if currentPhase ~= Constants.PHASE_ROUND then return end
+
+		local othersStillSafe = false
+		for p, s in playerStates do
+			if p ~= localPlayer and p.Parent and s == Constants.STATE_SAFE then
+				othersStillSafe = true
+				break
+			end
 		end
+		if not othersStillSafe then return end
+
+		task.spawn(playTag)
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		playerStates[player] = nil
 	end)
 end
 

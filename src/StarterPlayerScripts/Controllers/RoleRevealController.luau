@@ -16,6 +16,20 @@ local labelScale: UIScale?
 
 local revealGen = 0
 local currentPhase: string = Constants.PHASE_LOBBY
+local isRevealActive = false
+local revealEndedBindable = Instance.new("BindableEvent")
+RoleRevealController.RevealEnded = revealEndedBindable.Event
+
+function RoleRevealController.isRevealActive(): boolean
+	return isRevealActive
+end
+
+local function endReveal(myGen: number)
+	if myGen ~= revealGen then return end
+	if not isRevealActive then return end
+	isRevealActive = false
+	revealEndedBindable:Fire()
+end
 
 local CYCLE_DURATION = 2.0
 local CYCLE_INTERVAL_FAST = 0.04
@@ -80,7 +94,11 @@ end
 local function playReveal(localIsBurner: boolean, durationBudget: number)
 	revealGen += 1
 	local myGen = revealGen
-	if not resolveElements() then return end
+	isRevealActive = true
+	if not resolveElements() then
+		endReveal(myGen)
+		return
+	end
 	assert(roleFrame and frameScale and labelScale)
 
 	-- Reset to clean entrance state
@@ -96,7 +114,7 @@ local function playReveal(localIsBurner: boolean, durationBudget: number)
 		{ Scale = 1 }
 	)
 	task.wait(ENTRANCE_TIME)
-	if bailIfStale(myGen) then return end
+	if bailIfStale(myGen) then endReveal(myGen) return end
 
 	if not skipCycle then
 		local elapsed = 0
@@ -108,7 +126,7 @@ local function playReveal(localIsBurner: boolean, durationBudget: number)
 			local interval = CYCLE_INTERVAL_FAST + (t * t) * (CYCLE_INTERVAL_SLOW - CYCLE_INTERVAL_FAST)
 			task.wait(interval)
 			elapsed += interval
-			if bailIfStale(myGen) then return end
+			if bailIfStale(myGen) then endReveal(myGen) return end
 		end
 	end
 
@@ -119,14 +137,16 @@ local function playReveal(localIsBurner: boolean, durationBudget: number)
 		{ Scale = 1 }
 	)
 	task.wait(SETTLE_TIME)
-	if bailIfStale(myGen) then return end
+	if bailIfStale(myGen) then endReveal(myGen) return end
 
 	tween(frameScale,
 		TweenInfo.new(EXIT_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
 		{ Scale = 0 }
 	)
-	task.wait(EXIT_TIME+1)
-	if bailIfStale(myGen) then return end
+	task.wait(EXIT_TIME)
+	endReveal(myGen)
+	task.wait(1)
+	if revealGen ~= myGen then return end
 	if roleFrame then roleFrame.Visible = false end
 end
 
@@ -134,6 +154,10 @@ local function hideImmediately()
 	revealGen += 1 -- invalidate any in-flight task
 	if roleFrame then roleFrame.Visible = false end
 	if frameScale then frameScale.Scale = 0 end
+	if isRevealActive then
+		isRevealActive = false
+		revealEndedBindable:Fire()
+	end
 end
 
 function RoleRevealController.init()

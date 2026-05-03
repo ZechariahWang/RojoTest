@@ -65,6 +65,7 @@ Constants.PHASE_END = "End"
 -- ROLE REVEAL UI COLORS
 Constants.SURVIVOR_COLOR = Color3.fromRGB(27, 180, 32)   -- #1BB420
 Constants.TAGGER_COLOR = Color3.fromRGB(255, 56, 60)     -- #FF383C
+Constants.WHITE = Color3.fromRGB(255, 255, 255)       -- #FFFFFF
 
 -- END REASONS
 Constants.REASON_SURVIVED = "Survived"

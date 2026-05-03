@@ -21,6 +21,14 @@ local fuelMax = Constants.FIRE_FUEL_MAX
 local revealBlocking = false
 local currentPhase: string = Constants.PHASE_LOBBY
 
+-- Public: other client systems (viewmodel, etc.) listen here instead of re-tracking LMB.
+local fireStateChangedEvent = Instance.new("BindableEvent")
+FireAttackController.FireStateChanged = fireStateChangedEvent.Event
+
+function FireAttackController.isFiring(): boolean
+	return isHolding
+end
+
 local playerGui: PlayerGui
 local container: GuiObject?
 local fillBar: GuiObject?
@@ -81,12 +89,17 @@ local function reconcileMeterVisibility()
 	setHudVisible(isBurning and not revealBlocking)
 end
 
-local function sendFireRequest(active: boolean)
+local function setHolding(active: boolean, syncServer: boolean?)
 	if isHolding == active then return end
 	isHolding = active
-	if FireRequestRemote then
+	if syncServer ~= false and FireRequestRemote then
 		FireRequestRemote:FireServer(active)
 	end
+	fireStateChangedEvent:Fire(active)
+end
+
+local function sendFireRequest(active: boolean)
+	setHolding(active, true)
 end
 
 local function tryStartHold()
@@ -156,7 +169,9 @@ function FireAttackController.init()
 		updateMeter()
 		
 		if isHolding and fuel <= 0 then
-			isHolding = false
+			-- Server already force-stopped the stream when fuel hit 0; mirror locally
+			-- without re-sending the request, but still notify listeners (viewmodel, etc).
+			setHolding(false, false)
 		end
 	end)
 

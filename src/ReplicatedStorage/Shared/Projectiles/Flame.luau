@@ -36,7 +36,8 @@ local function buildEmitter(): ParticleEmitter
 	emitter.LightInfluence = 0
 	emitter.Rotation = NumberRange.new(0, 360)
 	emitter.RotSpeed = NumberRange.new(-80, 80)
-	emitter.EmissionDirection = Enum.NormalId.Top
+
+	emitter.EmissionDirection = Enum.NormalId.Left
 	return emitter
 end
 

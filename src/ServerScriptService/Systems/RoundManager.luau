@@ -175,13 +175,17 @@ local function applyTPWeapon(player: Player, on: boolean)
 	clone.Parent = char
 end
 
-local function setBurning(player: Player, withGrace: boolean, withOutline: boolean?)
+-- withCosmetics gates both the outline AND the third-person welded weapon —
+-- the two visuals that would identify the burner to other players. Defaults
+-- true; the initial burner passes false during role-reveal so neither shows
+-- up until the role-reveal UI fades out.
+local function setBurning(player: Player, withGrace: boolean, withCosmetics: boolean?)
 	PlayerState.set(player, Constants.STATE_BURNING)
 	InfectionSystem.markBurner(player, withGrace)
 	setWalkSpeed(player, Constants.BURNING_WALKSPEED)
-	applyTPWeapon(player, true)
-	if withOutline ~= false then
+	if withCosmetics ~= false then
 		applyOutline(player, true)
+		applyTPWeapon(player, true)
 	end
 end
 
@@ -276,9 +280,9 @@ local function runRound()
 		broadcastPhase(Constants.PHASE_LOBBY)
 		return
 	end
-	-- Initial burner: no outline yet — it would be visible through walls during
-	-- the role-reveal animation and spoil the suspense. Outline is added once
-	-- the role-reveal window closes.
+	-- Initial burner: no outline / no welded weapon yet — both would identify
+	-- the burner during the role-reveal animation and spoil the suspense.
+	-- Cosmetics are added once the role-reveal window closes.
 	setBurning(initialBurner, false, false)
 
 	broadcastPhase(Constants.PHASE_ROLE_REVEAL, Constants.ROLE_REVEAL_TIME, {
@@ -286,8 +290,9 @@ local function runRound()
 	})
 	task.wait(Constants.ROLE_REVEAL_TIME)
 
-	-- Role-reveal UI is gone now — safe to show the through-wall outline.
+	-- Role-reveal UI is gone now — show the visuals that reveal the burner.
 	applyOutline(initialBurner, true)
+	applyTPWeapon(initialBurner, true)
 
 	-- Reveal phase: positioning countdown. Damage and abilities still off.
 	broadcastPhase(Constants.PHASE_REVEAL, Constants.REVEAL_TIME, {

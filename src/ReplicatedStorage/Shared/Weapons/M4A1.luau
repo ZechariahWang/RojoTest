@@ -1,7 +1,6 @@
 
 return {
 	name = "M4A1",
-
 	fireMode = "Continuous",
 	projectileName = "Flame",
 	muzzleAttachmentName = "Muzzle",

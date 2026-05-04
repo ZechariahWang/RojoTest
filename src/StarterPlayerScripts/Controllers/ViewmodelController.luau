@@ -4,7 +4,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
-local Lighting = game:GetService("Lighting")
 
 local Constants = require(ReplicatedStorage.Shared.Constants)
 local Weapons = require(ReplicatedStorage.Shared.Weapons)
@@ -35,18 +34,12 @@ type TrackSet = {
 type EquipState = {
 	settings: any,
 
-	-- ViewportFrame layer (renders arms above world geometry).
-	screenGui: ScreenGui,
-	viewportFrame: ViewportFrame,
-	viewportCamera: Camera,
-	worldModel: WorldModel,
+	-- Viewmodel lives in Workspace.CurrentCamera (client-only, doesn't replicate)
+	-- so it picks up real PBR lighting, shadows, sun, atmosphere — same as any
+	-- world part. Raycast pullback in step() prevents wall clipping.
 	viewmodel: Model,
-
-	-- Muzzle tracker — particles can't render in a ViewportFrame, so a workspace
-	-- part mirrors the in-viewport muzzle's CFrame each frame.
-	internalMuzzle: Instance,
-	muzzleTracker: BasePart,
-	trackerMuzzle: Attachment,
+	muzzle: Instance,
+	rayParams: RaycastParams,
 
 	-- Animation state.
 	fpTracks: TrackSet,
@@ -89,6 +82,9 @@ local function disablePhysicsFlags(p: BasePart)
 	p.CanQuery = false
 	p.CanTouch = false
 	p.Massless = true
+	-- Viewmodel sits inches from the camera; if it cast shadows, the player
+	-- would see their gun's silhouette across the world.
+	p.CastShadow = false
 end
 
 local function ensureFallbackMuzzle(rightArm: BasePart, settings: any): Attachment
@@ -210,37 +206,6 @@ local function destroySounds(sounds: { [string]: Sound })
 	end
 end
 
-local function buildViewportLayer(): (ScreenGui, ViewportFrame, WorldModel, Camera)
-	local screenGui = Instance.new("ScreenGui")
-	screenGui.Name = "ViewmodelLayer"
-	screenGui.ResetOnSpawn = false
-	screenGui.IgnoreGuiInset = true
-	screenGui.DisplayOrder = -1 -- HUD draws on top of viewmodel
-	screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
-
-	local viewportFrame = Instance.new("ViewportFrame")
-	viewportFrame.Name = "Viewport"
-	viewportFrame.Size = UDim2.fromScale(1, 1)
-	viewportFrame.BackgroundTransparency = 1
-	viewportFrame.LightColor = Color3.fromRGB(255, 240, 230)
-	viewportFrame.LightDirection = Vector3.new(-1, -2, 1)
-	viewportFrame.Ambient = Color3.fromRGB(140, 140, 140)
-	viewportFrame.Parent = screenGui
-
-	-- WorldModel runs physics so motor + animation Transform propagate to unanchored arms.
-	local worldModel = Instance.new("WorldModel")
-	worldModel.Name = "ViewmodelWorld"
-	worldModel.Parent = viewportFrame
-
-	local viewportCamera = Instance.new("Camera")
-	viewportCamera.Name = "ViewmodelCamera"
-	viewportCamera.FieldOfView = Constants.VIEWMODEL_FOV
-	viewportCamera.Parent = viewportFrame
-	viewportFrame.CurrentCamera = viewportCamera
-
-	return screenGui, viewportFrame, worldModel, viewportCamera
-end
-
 local function detach()
 	if not equipped then return end
 	local s = equipped
@@ -254,22 +219,13 @@ local function detach()
 		s.projectile:stop()
 	end
 
-	-- TP animator persists on the character, so explicit stop is required.
 	stopAllTracks(s.tpTracks, 0.1)
-	-- FP animator goes away with the viewmodel — stop is just polite.
 	stopAllTracks(s.fpTracks, 0.05)
-
-	-- The third-person weapon model is owned by the server (RoundManager.applyTPWeapon)
-	-- so it replicates to other players. We don't manage it here — the server clears
-	-- it when the burner becomes safe / lobby / round ends.
 
 	destroySounds(s.clonedSounds)
 
-	if s.muzzleTracker and s.muzzleTracker.Parent then
-		s.muzzleTracker:Destroy()
-	end
-	if s.screenGui and s.screenGui.Parent then
-		s.screenGui:Destroy()
+	if s.viewmodel and s.viewmodel.Parent then
+		s.viewmodel:Destroy()
 	end
 
 	if s.hiddenServerEmitter and s.hiddenServerEmitter.Parent then
@@ -308,8 +264,6 @@ local function attach()
 	end
 	viewmodel.PrimaryPart = hrp
 
-	-- HRP is anchored (we drive it via PivotTo). Other parts are unanchored so
-	-- motor constraints + animation Transform can drive them inside the WorldModel.
 	for _, descendant in ipairs(viewmodel:GetDescendants()) do
 		if descendant:IsA("BasePart") then
 			if descendant == hrp then
@@ -321,17 +275,12 @@ local function attach()
 		end
 	end
 
-	local screenGui, viewportFrame, worldModel, viewportCamera = buildViewportLayer()
-	viewmodel.Parent = worldModel
+	viewmodel.Parent = Workspace.CurrentCamera
 
-	-- FP animator (on the viewmodel rig).
 	local animController = viewmodel:FindFirstChildOfClass("AnimationController")
 	local fpAnimator: Animator? = if animController then animController:FindFirstChildOfClass("Animator") else nil
 	local fpTracks = buildFPTracks(fpAnimator, settings)
 
-	-- TP animator (on the player's character) + sound parent (Torso).
-	-- Note: the third-person weapon model is welded by the server (RoundManager
-	-- applyTPWeapon), not here — that's how it replicates to other players.
 	local _char, tpAnimator, torso = getCharacterAnimator()
 	local tpTracks: TrackSet = if tpAnimator then buildTPTracks(tpAnimator, settings) else ({} :: any)
 	local clonedSounds = if torso then cloneSounds(settings, torso) else {}
@@ -347,38 +296,25 @@ local function attach()
 	if not muzzle then
 		warn("ViewmodelController: could not resolve muzzle for " .. tostring(currentWeaponName))
 		viewmodel:Destroy()
-		screenGui:Destroy()
 		return
 	end
-
-	-- Workspace tracker for the muzzle particle (ViewportFrame doesn't render emitters).
-	local muzzleTracker = Instance.new("Part")
-	muzzleTracker.Name = "ViewmodelMuzzleTracker"
-	muzzleTracker.Size = Vector3.new(0.1, 0.1, 0.1)
-	muzzleTracker.Transparency = 1
-	muzzleTracker.Anchored = true
-	disablePhysicsFlags(muzzleTracker)
-	muzzleTracker.Parent = Workspace.CurrentCamera
-
-	local trackerMuzzle = Instance.new("Attachment")
-	trackerMuzzle.Name = settings.muzzleAttachmentName or "Muzzle"
-	trackerMuzzle.Parent = muzzleTracker
 
 	local hiddenEmitter: ParticleEmitter? = findLocalTorsoEmitter()
 	if hiddenEmitter then
 		hiddenEmitter.Enabled = false
 	end
 
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.IgnoreWater = true
+	local localChar = localPlayer.Character
+	rayParams.FilterDescendantsInstances = if localChar then { viewmodel, localChar } else { viewmodel }
+
 	equipped = {
 		settings = settings,
-		screenGui = screenGui,
-		viewportFrame = viewportFrame,
-		viewportCamera = viewportCamera,
-		worldModel = worldModel,
 		viewmodel = viewmodel,
-		internalMuzzle = muzzle,
-		muzzleTracker = muzzleTracker,
-		trackerMuzzle = trackerMuzzle,
+		muzzle = muzzle,
+		rayParams = rayParams,
 		fpTracks = fpTracks,
 		tpTracks = tpTracks,
 		clonedSounds = clonedSounds,
@@ -389,9 +325,6 @@ local function attach()
 		projectile = nil,
 	}
 
-	-- Equip → Idle: kick off the equip anim, then start idle (idle is looped, so it
-	-- keeps playing under fire/reload). For most weapons equip is short; we don't
-	-- gate idle on equip's End event since idle's lower priority lets equip layer over.
 	if fpTracks.equip then fpTracks.equip:Play(0.1) end
 	if tpTracks.equip then tpTracks.equip:Play(0.1) end
 	if clonedSounds.equip then clonedSounds.equip:Play() end
@@ -413,46 +346,63 @@ local function attach()
 		e.swayCF = e.swayCF:Lerp(targetSway, Constants.VIEWMODEL_SWAY_LERP)
 		e.lastCameraCF = camera.CFrame
 
+		-- Realistic bob: amplitude scales with actual horizontal speed (so walking
+		-- vs sprinting vs idling all read differently), with roll + pitch on
+		-- each step and a constant low-freq breathing that fades down when
+		-- moving. Airborne kills the bob and lets the gun "settle" downward.
 		local localChar = localPlayer.Character
 		local hum = localChar and localChar:FindFirstChildOfClass("Humanoid")
-		local moving = hum and hum.MoveDirection.Magnitude > 0
+		local hrp = localChar and localChar:FindFirstChild("HumanoidRootPart")
+
+		local speedRatio = 0
+		if hrp and hrp:IsA("BasePart") then
+			local v = hrp.AssemblyLinearVelocity
+			local hSpeed = Vector3.new(v.X, 0, v.Z).Magnitude
+			speedRatio = math.clamp(hSpeed / Constants.SAFE_WALKSPEED, 0, 1.5)
+		end
+
+		local airborne = false
+		if hum then
+			local hState = hum:GetState()
+			airborne = hState == Enum.HumanoidStateType.Freefall
+				or hState == Enum.HumanoidStateType.Jumping
+		end
+
+		local now = os.clock()
 		local targetBob: CFrame
-		if moving then
-			local t = os.clock() * Constants.VIEWMODEL_BOB_FREQ
-			targetBob = CFrame.new(
-				math.cos(t) * Constants.VIEWMODEL_BOB_X_AMP,
-				math.abs(math.sin(t)) * -Constants.VIEWMODEL_BOB_Y_AMP,
-				0
-			)
+		if airborne then
+			targetBob = CFrame.new(0, -Constants.VIEWMODEL_AIRBORNE_DROP, 0)
 		else
-			targetBob = CFrame.new()
+			local phase = now * Constants.VIEWMODEL_BOB_FREQ
+			local walkX = math.cos(phase) * Constants.VIEWMODEL_BOB_X_AMP * speedRatio
+			local walkY = math.abs(math.sin(phase)) * -Constants.VIEWMODEL_BOB_Y_AMP * speedRatio
+			local roll = math.cos(phase) * Constants.VIEWMODEL_BOB_ROLL_RAD * speedRatio
+			local pitch = math.abs(math.sin(phase)) * Constants.VIEWMODEL_BOB_PITCH_RAD * speedRatio
+
+			-- Idle breathing fades out when walking/sprinting so the patterns don't fight.
+			local breathScale = math.max(0, 1 - speedRatio * 0.8)
+			local breathPhase = now * Constants.VIEWMODEL_BREATH_FREQ
+			local breathY = math.sin(breathPhase) * Constants.VIEWMODEL_BREATH_AMP * breathScale
+			local breathX = math.sin(breathPhase * 0.6) * Constants.VIEWMODEL_BREATH_AMP * 0.35 * breathScale
+
+			targetBob = CFrame.new(walkX + breathX, walkY + breathY, 0)
+				* CFrame.Angles(pitch, 0, roll)
 		end
 		e.bobOffset = e.bobOffset:Lerp(targetBob, Constants.VIEWMODEL_BOB_LERP)
 
-		-- PivotTo moves HRP (anchored) directly; physics integrates motor +
-		-- animation Transform on the unanchored arms each step.
-		local pivot = camera.CFrame * e.swayCF * e.bobOffset
+		local origin = camera.CFrame.Position
+		local probe = camera.CFrame.LookVector * Constants.VIEWMODEL_PULLBACK_DEPTH
+		local hit = Workspace:Raycast(origin, probe, e.rayParams)
+		local pullback = 0
+		if hit then
+			local hitDist = (hit.Position - origin).Magnitude
+			pullback = (Constants.VIEWMODEL_PULLBACK_DEPTH - hitDist) + Constants.VIEWMODEL_PULLBACK_PADDING
+			if pullback < 0 then pullback = 0 end
+		end
+
+		local pivot = camera.CFrame * e.swayCF * e.bobOffset * CFrame.new(0, 0, pullback)
 		e.viewmodel:PivotTo(pivot)
 
-		e.viewportCamera.CFrame = camera.CFrame
-
-		-- Sync ViewportFrame lighting with the world so the weapon doesn't read as
-		-- a flat unlit silhouette. Ambient + sun direction match the actual scene.
-		e.viewportFrame.Ambient = Lighting.OutdoorAmbient
-		local sunDir = Lighting:GetSunDirection()
-		if sunDir.Magnitude > 0 then
-			e.viewportFrame.LightDirection = -sunDir
-		end
-
-		if e.internalMuzzle and e.internalMuzzle.Parent then
-			if e.internalMuzzle:IsA("Attachment") then
-				e.muzzleTracker.CFrame = e.internalMuzzle.WorldCFrame
-			elseif e.internalMuzzle:IsA("BasePart") then
-				e.muzzleTracker.CFrame = e.internalMuzzle.CFrame
-			end
-		end
-
-		-- Server respawns the torso emitter on every fire-start; keep silencing it.
 		if not e.hiddenServerEmitter or not e.hiddenServerEmitter.Parent then
 			local found = findLocalTorsoEmitter()
 			if found then
@@ -481,8 +431,6 @@ local function playFire(s: EquipState)
 end
 
 local function stopFire(s: EquipState)
-	-- Continuous mode plays the loop while held; other modes are one-shot
-	-- and don't need explicit stopping (they finish naturally).
 	if s.settings.fireMode ~= "Continuous" then return end
 	if s.fpTracks.fire and s.fpTracks.fire.IsPlaying then s.fpTracks.fire:Stop(0.08) end
 	if s.tpTracks.fire and s.tpTracks.fire.IsPlaying then s.tpTracks.fire:Stop(0.08) end
@@ -495,7 +443,7 @@ local function onFireStateChanged(active: boolean)
 		if not equipped.projectile then
 			local projectile = Projectiles[equipped.settings.projectileName]
 			if projectile then
-				equipped.projectile = projectile.start(equipped.trackerMuzzle)
+				equipped.projectile = projectile.start(equipped.muzzle)
 			else
 				warn("ViewmodelController: no projectile named " .. tostring(equipped.settings.projectileName))
 			end
@@ -514,11 +462,13 @@ local function playInspect()
 	local s = equipped
 	if not s then return end
 	local fp = s.fpTracks.inspect
-	-- Inspect is FP-only by design (no TPInspectAnim slot in the schema).
-	-- Skip if already mid-inspect or if the weapon has no inspect anim.
-	if not fp then return end
+
+	if not fp then 
+		print("no inspect animation for " .. tostring(currentWeaponName))
+		return 
+	end
+
 	if fp.IsPlaying then return end
-	-- Don't interrupt fire/reload
 	if s.fpTracks.fire and s.fpTracks.fire.IsPlaying then return end
 	if s.fpTracks.reload and s.fpTracks.reload.IsPlaying then return end
 

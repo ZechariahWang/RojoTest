@@ -55,9 +55,16 @@ Constants.VIEWMODEL_FOV = 70
 Constants.VIEWMODEL_SWAY_AMOUNT = 0.3
 Constants.VIEWMODEL_SWAY_LERP = 0.1
 Constants.VIEWMODEL_BOB_X_AMP = 0.08
-Constants.VIEWMODEL_BOB_Y_AMP = 0.06
-Constants.VIEWMODEL_BOB_FREQ = 8  
+Constants.VIEWMODEL_BOB_Y_AMP = 0.30 -- important lol
+Constants.VIEWMODEL_BOB_FREQ = 11 -- important note to self
 Constants.VIEWMODEL_BOB_LERP = 0.1
+Constants.VIEWMODEL_BOB_ROLL_RAD = math.rad(0.6)      -- shoulder roll per step 
+Constants.VIEWMODEL_BOB_PITCH_RAD = math.rad(0.4)     -- nod-down on each foot strike 
+Constants.VIEWMODEL_BREATH_FREQ = 1.4                 -- idle breathing radians/sec 
+Constants.VIEWMODEL_BREATH_AMP = 0.022                -- idle breathing vertical amplitude 
+Constants.VIEWMODEL_AIRBORNE_DROP = 0.40              -- gun "settles" downward in air 
+Constants.VIEWMODEL_PULLBACK_DEPTH = 0                -- forward distance the wall-check ray probes from the camera
+Constants.VIEWMODEL_PULLBACK_PADDING = 0              -- extra retreat past the hit so the muzzle never touches the wall
 
 -- DASH
 Constants.DASH_COOLDOWN = 3

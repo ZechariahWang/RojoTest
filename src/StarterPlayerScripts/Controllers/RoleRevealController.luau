@@ -18,6 +18,7 @@ local revealGen = 0
 local currentPhase: string = Constants.PHASE_LOBBY
 local isRevealActive = false
 local revealEndedBindable = Instance.new("BindableEvent")
+local tick = ReplicatedStorage:WaitForChild("Sounds"):WaitForChild("Game"):WaitForChild("RoleTick") :: Sound
 RoleRevealController.RevealEnded = revealEndedBindable.Event
 
 function RoleRevealController.isRevealActive(): boolean
@@ -122,6 +123,7 @@ local function playReveal(localIsBurner: boolean, durationBudget: number)
 		while elapsed < CYCLE_DURATION do
 			idx += 1
 			setRoleText(idx % 2 == 1)
+			tick:Play()
 			local t = elapsed / CYCLE_DURATION
 			local interval = CYCLE_INTERVAL_FAST + (t * t) * (CYCLE_INTERVAL_SLOW - CYCLE_INTERVAL_FAST)
 			task.wait(interval)

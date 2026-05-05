@@ -222,28 +222,55 @@ local function healAllPlayers()
 end
 
 local function endRound(reason: string, winners: { string })
+	-- Disable damage / abilities / tagging immediately. Clients gate fire+dash
+	-- on currentPhase being PHASE_ROUND, so broadcasting PHASE_END below also
+	-- shuts down the local viewmodel stream, burner first-person, etc.
 	FireAttackSystem.stop()
 	InfectionSystem.stop()
 	FireSpreadSystem.stop()
 	AbilitySystem.stop()
+
+	for _, player in Players:GetPlayers() do
+		applyTPWeapon(player, false)
+	end
+	
 	currentStage = 0
+
+	-- Belt-and-suspenders invincibility for the freeze window in case any
+	-- in-flight damage tick lands after the systems stopped.
+	for _, player in Players:GetPlayers() do
+		local char = player.Character
+		if char and not char:FindFirstChild("RoundEndForceField") then
+			local ff = Instance.new("ForceField")
+			ff.Name = "RoundEndForceField"
+			ff.Visible = false
+			ff.Parent = char
+		end
+	end
+
+	-- Broadcast END now (with the full freeze + lobby duration) so clients
+	-- transition out of round-mode visuals while players remain in the arena.
+	broadcastPhase(Constants.PHASE_END, Constants.END_DELAY_TIME + Constants.END_TIME, {
+		winners = winners,
+		reason = reason,
+	})
+
+	task.wait(Constants.END_DELAY_TIME)
 
 	healAllPlayers()
 
 	for _, player in Players:GetPlayers() do
-		if player.Character then
+		local char = player.Character
+		if char then
 			applyFire(player, false)
+			local ff = char:FindFirstChild("RoundEndForceField")
+			if ff then ff:Destroy() end
 		end
 		setLobby(player)
 		MapManager.teleportToLobby(player)
 	end
 
 	MapManager.unloadMap()
-
-	broadcastPhase(Constants.PHASE_END, Constants.END_TIME, {
-		winners = winners,
-		reason = reason,
-	})
 
 	task.wait(Constants.END_TIME)
 end

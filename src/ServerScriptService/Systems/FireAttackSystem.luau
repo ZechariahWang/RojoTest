@@ -81,8 +81,6 @@ local function spawnVisual(player: Player, s: State)
 
 	local attachment = Instance.new("Attachment")
 	attachment.Name = "FlameAttachment"
-	-- Position 2 studs in front of the torso. Rotate so the attachment's +Y
-	-- (which the emitter uses as Top) points along the torso's forward (-Z).
 	attachment.CFrame = CFrame.new(0, 0, -2) * CFrame.Angles(-math.pi / 2, 0, 0)
 	attachment.Parent = torso
 
@@ -104,6 +102,7 @@ local function spawnVisual(player: Player, s: State)
 		NumberSequenceKeypoint.new(0.5, 0.3),
 		NumberSequenceKeypoint.new(1, 1),
 	})
+	
 	emitter.Lifetime = NumberRange.new(0.4, 0.6)
 	emitter.Speed = NumberRange.new(35, 45)
 	emitter.SpreadAngle = Vector2.new(Constants.FIRE_CONE_HALF_ANGLE, Constants.FIRE_CONE_HALF_ANGLE)

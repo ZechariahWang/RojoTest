@@ -11,10 +11,10 @@ return {
 	fireSound = game.ReplicatedStorage.Sounds.Weapons.M4A1.Fire;
 	
 	equipAnim = "rbxassetid://99339998455578";
-	equipSound = game.ReplicatedStorage.Sounds.Weapons.M4A1.Fire;
+	equipSound = nil;
 	
 	deEquipAnim = "rbxassetid://103035895010736";
-	deEquipSound = game.ReplicatedStorage.Sounds.Weapons.M4A1.Fire;
+	deEquipSound = nil;
 	
 	reloadAnim = "rbxassetid://118391725443571";
 	reloadSound = game.ReplicatedStorage.Sounds.Weapons.M4A1.Fire;
@@ -23,7 +23,7 @@ return {
 	emptyReloadSound = game.ReplicatedStorage.Sounds.Weapons.M4A1.Fire;
 	
 	inspectAnim = "rbxassetid://123346981295193";
-	inspectSound = game.ReplicatedStorage.Sounds.Weapons.M4A1.Fire;
+	inspectSound = nil;
 	
 	idleAnim = "rbxassetid://89992382176742";
 	

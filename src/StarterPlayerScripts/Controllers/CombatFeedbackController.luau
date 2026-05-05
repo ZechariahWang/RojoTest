@@ -6,6 +6,7 @@ local SoundService = game:GetService("SoundService")
 local UserInputService = game:GetService("UserInputService")
 
 local Constants = require(ReplicatedStorage.Shared.Constants)
+local FireAttackController = require(script.Parent.FireAttackController)
 local CombatFeedbackController = {}
 local localPlayer = Players.LocalPlayer
 
@@ -123,13 +124,22 @@ local function setBurnerMode(active: boolean)
 			crosshair.BackgroundTransparency = CROSSHAIR_IDLE_TRANSPARENCY
 			crosshair.Visible = true
 		end
+		-- Sync from the authoritative fire state in case burner mode toggled on
+		-- while fire was already in flight.
+		isFiring = FireAttackController.isFiring()
+		if isFiring then
+			applyCrosshairFiring(true)
+		end
 	else
 		localPlayer.CameraMode = Enum.CameraMode.Classic
 		UserInputService.MouseIconEnabled = true
 		if crosshair then
 			crosshair.Visible = false
 		end
-		isFiring = false
+		if isFiring then
+			isFiring = false
+			applyCrosshairFiring(false)
+		end
 	end
 end
 
@@ -378,20 +388,14 @@ function CombatFeedbackController.init()
 		reconcileBurnerMode()
 	end)
 
-	UserInputService.InputBegan:Connect(function(input, gpe)
-		if gpe then return end
+	-- Crosshair tracks the same signal that drives the viewmodel flame, so the
+	-- two can never disagree (e.g. LMB during the Reveal countdown produces no
+	-- FireStateChanged event, so the crosshair stays idle while no flame emits).
+	FireAttackController.FireStateChanged:Connect(function(active: boolean)
 		if not burnerModeActive then return end
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-		if isFiring then return end
-		isFiring = true
-		applyCrosshairFiring(true)
-	end)
-
-	UserInputService.InputEnded:Connect(function(input)
-		if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-		if not isFiring then return end
-		isFiring = false
-		applyCrosshairFiring(false)
+		if isFiring == active then return end
+		isFiring = active
+		applyCrosshairFiring(active)
 	end)
 
 	localPlayer.CharacterAdded:Connect(onCharacterAdded)

@@ -104,6 +104,7 @@ end
 
 local function tryStartHold()
 	if not isBurning then return end
+	if currentPhase ~= Constants.PHASE_ROUND then return end
 	if fuel < Constants.FIRE_FUEL_MIN_TO_START then return end
 	sendFireRequest(true)
 end
@@ -144,6 +145,9 @@ function FireAttackController.init()
 		if phase == Constants.PHASE_ROLE_REVEAL then
 			revealBlocking = true
 			reconcileMeterVisibility()
+		end
+		if phase ~= Constants.PHASE_ROUND and isHolding then
+			stopHold()
 		end
 	end)
 

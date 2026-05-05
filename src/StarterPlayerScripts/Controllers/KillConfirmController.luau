@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local KillConfirmSound = ReplicatedStorage:FindFirstChild("Sounds"):FindFirstChild("Game"):FindFirstChild("KillConfirm") :: Sound
 
 local KillConfirmController = {}
 
@@ -13,11 +14,18 @@ local HOLD_TIME = 3.0
 local TEXT_FADE_OUT_TIME = 0.20
 local FRAME_COLLAPSE_TIME = 0.25
 
+-- Stacking: newest banner sits at the template's authored position; older
+-- banners shift by (STACK_DIRECTION = -1 → upward) per slot. Flip to +1 if
+-- the popup lives near the top of the screen and should grow downward.
+local STACK_GAP = 4
+local STACK_DIRECTION = -1
+local STACK_TWEEN_TIME = 0.18
+local MAX_STACK = 5
+
 local LABEL_COLOR = "rgb(255,255,255)"
 local NAME_COLOR = "rgb(255,141,40)"
 
-local confirmGen = 0
-local activeClone: GuiObject? = nil
+local activeBanners: { GuiObject } = {}
 
 local function findGameGui(): ScreenGui?
 	if not playerGui then return nil end
@@ -49,7 +57,30 @@ local function buildText(victimName: string): string
 	)
 end
 
-local function playKillConfirm(victimName: string, myGen: number)
+-- Reflow positions every active banner: the most recently spawned (last in
+-- the array) sits at the template's authored position; each older banner is
+-- offset by (height + gap) * STACK_DIRECTION per slot away from it.
+local function reflowBanners()
+	local template = getTemplate()
+	if not template then return end
+	local basePos = template.Position
+	local refHeight = template.AbsoluteSize.Y
+	if refHeight <= 0 then refHeight = 30 end
+	local count = #activeBanners
+	for i, banner in ipairs(activeBanners) do
+		if not banner.Parent then continue end
+		local stackIndex = count - i
+		local targetY = basePos.Y.Offset + STACK_DIRECTION * stackIndex * (refHeight + STACK_GAP)
+		local target = UDim2.new(basePos.X.Scale, basePos.X.Offset, basePos.Y.Scale, targetY)
+		TweenService:Create(
+			banner,
+			TweenInfo.new(STACK_TWEEN_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ Position = target }
+		):Play()
+	end
+end
+
+local function playKillConfirm(victimName: string)
 	local template = getTemplate()
 	local gui = findGameGui()
 	if not template or not gui then return end
@@ -68,6 +99,7 @@ local function playKillConfirm(victimName: string, myGen: number)
 	local originalStrokeTransparency = stroke and stroke.Transparency or 0
 
 	clone.Size = collapsedSize
+	clone.Position = template.Position
 	title.RichText = true
 	title.Text = buildText(victimName)
 	title.TextTransparency = 1
@@ -75,11 +107,21 @@ local function playKillConfirm(victimName: string, myGen: number)
 	clone.Visible = true
 	clone.Parent = gui
 
-	activeClone = clone
+	if KillConfirmSound then
+		KillConfirmSound:Play()
+	end
 
-	local function bail()
-		if activeClone == clone then activeClone = nil end
-		clone:Destroy()
+	table.insert(activeBanners, clone)
+	-- Soft cap: oldest banner gets evicted so the stack can't run off-screen.
+	-- Its own coroutine bails on the next `clone.Parent` check after destroy.
+	while #activeBanners > MAX_STACK do
+		local oldest = table.remove(activeBanners, 1)
+		if oldest and oldest.Parent then oldest:Destroy() end
+	end
+	reflowBanners()
+
+	local function alive(): boolean
+		return clone.Parent ~= nil
 	end
 
 	TweenService:Create(
@@ -88,7 +130,7 @@ local function playKillConfirm(victimName: string, myGen: number)
 		{ Size = originalSize }
 	):Play()
 	task.wait(FRAME_EXPAND_TIME)
-	if myGen ~= confirmGen then bail() return end
+	if not alive() then return end
 
 	TweenService:Create(
 		title,
@@ -103,10 +145,10 @@ local function playKillConfirm(victimName: string, myGen: number)
 		):Play()
 	end
 	task.wait(TEXT_FADE_IN_TIME)
-	if myGen ~= confirmGen then bail() return end
+	if not alive() then return end
 
 	task.wait(HOLD_TIME)
-	if myGen ~= confirmGen then bail() return end
+	if not alive() then return end
 
 	TweenService:Create(
 		title,
@@ -121,7 +163,7 @@ local function playKillConfirm(victimName: string, myGen: number)
 		):Play()
 	end
 	task.wait(TEXT_FADE_OUT_TIME)
-	if myGen ~= confirmGen then bail() return end
+	if not alive() then return end
 
 	TweenService:Create(
 		clone,
@@ -130,19 +172,15 @@ local function playKillConfirm(victimName: string, myGen: number)
 	):Play()
 	task.wait(FRAME_COLLAPSE_TIME)
 
-	if activeClone == clone then activeClone = nil end
-	clone:Destroy()
+	local idx = table.find(activeBanners, clone)
+	if idx then table.remove(activeBanners, idx) end
+	if clone.Parent then clone:Destroy() end
+	reflowBanners()
 end
 
 local function onKillFeed(killerName: string?, victimName: string)
 	if killerName ~= localPlayer.Name then return end
-
-	confirmGen += 1
-	if activeClone then
-		activeClone:Destroy()
-		activeClone = nil
-	end
-	task.spawn(playKillConfirm, victimName, confirmGen)
+	task.spawn(playKillConfirm, victimName)
 end
 
 function KillConfirmController.init()

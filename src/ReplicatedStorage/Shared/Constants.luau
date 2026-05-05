@@ -6,6 +6,7 @@ Constants.INTERMISSION_TIME = 10
 Constants.ROLE_REVEAL_TIME = 8.0 -- role-reveal UI animation window (no actions allowed)
 Constants.REVEAL_TIME = 10 -- post-role-reveal positioning grace. No damage, no abilities.
 Constants.ROUND_TIME = 90
+Constants.END_DELAY_TIME = 3 -- post-round freeze: players stay in arena, invincible, abilities/tagging off, before teleport to lobby
 Constants.END_TIME = 5
 
 -- STAGES (within Round phase)
@@ -18,7 +19,7 @@ Constants.NEW_BURNER_GRACE = 1.0
 -- FIRE ATTACK (active flamethrower from burners)
 Constants.FIRE_CONE_RANGE = 14            -- studs
 Constants.FIRE_CONE_HALF_ANGLE = 35       -- degrees, ~70° total spread
-Constants.FIRE_DAMAGE_PER_SEC = 18
+Constants.FIRE_DAMAGE_PER_SEC = 80
 Constants.FIRE_FUEL_MAX = 3.0             -- seconds of continuous fire
 Constants.FIRE_FUEL_REGEN_PER_SEC = 1.0
 Constants.FIRE_FUEL_MIN_TO_START = 0.3    -- prevents tap-spam at empty

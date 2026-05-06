@@ -163,8 +163,6 @@ end
 local function step(dt: number)
 	for player, s in states do
 		if s.firing then
-			-- If the character vanished (respawn / removal), the visual is gone;
-			-- stop draining fuel and reset state.
 			local root, _ = getCharParts(player)
 			if not root then
 				stopFiring(player, s)

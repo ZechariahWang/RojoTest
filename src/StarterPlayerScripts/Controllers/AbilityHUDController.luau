@@ -1,0 +1,203 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local Constants = require(ReplicatedStorage.Shared.Constants)
+local Abilities = require(ReplicatedStorage.Shared.Abilities)
+
+local AbilityHUDController = {}
+
+local localPlayer = Players.LocalPlayer
+local PlayerStateRemote: RemoteEvent
+local RoundStateRemote: RemoteEvent
+
+local localState: string = Constants.STATE_LOBBY
+local currentPhase: string = Constants.PHASE_LOBBY
+local activeAbilityId: string? = nil
+
+local cooldownGen = 0
+local activeTween: Tween? = nil
+
+local playerGui: PlayerGui
+local container: GuiObject?
+local iconLabel: ImageLabel?
+local titleLabel: TextLabel?
+local overlay: GuiObject?
+local overlayNormalized = false
+
+local function resolveElements()
+	if container and container.Parent then return end
+	container = nil
+	iconLabel = nil
+	titleLabel = nil
+	overlay = nil
+	overlayNormalized = false
+
+	if not playerGui then return end
+	local gameGui = playerGui:FindFirstChild("Game")
+	if not gameGui then return end
+
+	local ability = gameGui:FindFirstChild("Ability")
+	if not ability or not ability:IsA("GuiObject") then return end
+	container = ability
+
+	local icon = ability:FindFirstChild("AbilityIcon")
+	if icon and icon:IsA("ImageLabel") then
+		iconLabel = icon
+	end
+
+	local title = ability:FindFirstChild("AbilityTitle")
+	if title and title:IsA("TextLabel") then
+		titleLabel = title
+	end
+
+	local ov = ability:FindFirstChild("Overlay")
+	if ov and ov:IsA("GuiObject") then
+		overlay = ov
+	end
+end
+
+local function normalizeOverlay()
+	if not overlay or overlayNormalized then return end
+	overlay.AnchorPoint = Vector2.new(0, 1)
+	overlay.Position = UDim2.new(0, 0, 1, 0)
+	overlay.Size = UDim2.new(1, 0, 1, 0)
+	overlay.BackgroundTransparency = 1
+	overlay.Visible = false
+	overlayNormalized = true
+end
+
+local function cancelCooldownTween()
+	cooldownGen += 1
+	if activeTween then
+		activeTween:Cancel()
+		activeTween = nil
+	end
+	if overlay then
+		overlay.Visible = false
+		overlay.Size = UDim2.new(1, 0, 1, 0)
+	end
+end
+
+local function getIconImage(iconName: string): (string?, Color3?)
+	local assets = ReplicatedStorage:FindFirstChild("Assets")
+	if not assets then return nil, nil end
+	local iconsFolder = assets:FindFirstChild("Icons")
+	if not iconsFolder then return nil, nil end
+	local source = iconsFolder:FindFirstChild(iconName)
+	if not source or not source:IsA("ImageLabel") then return nil, nil end
+	return source.Image, source.ImageColor3
+end
+
+local function applyAbility(ability: Abilities.AbilityDef)
+	resolveElements()
+	if iconLabel then
+		local image, color = getIconImage(ability.iconName)
+		if image then
+			iconLabel.Image = image
+		end
+		if color then
+			iconLabel.ImageColor3 = color
+		end
+	end
+	if titleLabel then
+		titleLabel.Text = ability.displayName
+	end
+end
+
+function AbilityHUDController.setActiveAbility(abilityId: string?)
+	if activeAbilityId == abilityId then return end
+	activeAbilityId = abilityId
+
+	resolveElements()
+	cancelCooldownTween()
+
+	if not container then return end
+
+	if not abilityId then
+		container.Visible = false
+		return
+	end
+
+	local ability = Abilities[abilityId]
+	if not ability then
+		container.Visible = false
+		return
+	end
+
+	applyAbility(ability)
+	normalizeOverlay()
+	container.Visible = true
+end
+
+function AbilityHUDController.triggerCooldown(abilityId: string)
+	local ability = Abilities[abilityId]
+	if not ability then return end
+
+	resolveElements()
+	if not overlay then return end
+	normalizeOverlay()
+
+	cooldownGen += 1
+	local gen = cooldownGen
+	if activeTween then
+		activeTween:Cancel()
+		activeTween = nil
+	end
+
+	overlay.Size = UDim2.new(1, 0, 1, 0)
+	overlay.BackgroundTransparency = 0.2
+	overlay.Visible = true
+
+	local tween = TweenService:Create(
+		overlay,
+		TweenInfo.new(ability.cooldown, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+		{ Size = UDim2.new(1, 0, 0, 0) }
+	)
+	activeTween = tween
+	tween.Completed:Connect(function()
+		if gen ~= cooldownGen then return end
+		if overlay then
+			overlay.Visible = false
+			overlay.Size = UDim2.new(1, 0, 1, 0)
+		end
+		activeTween = nil
+	end)
+	tween:Play()
+end
+
+local function reconcileVisibility()
+	local canUse = (localState == Constants.STATE_SAFE) and (currentPhase == Constants.PHASE_ROUND)
+	if canUse then
+		AbilityHUDController.setActiveAbility("Dash")
+	else
+		AbilityHUDController.setActiveAbility(nil)
+	end
+end
+
+function AbilityHUDController.init()
+	playerGui = localPlayer:WaitForChild("PlayerGui")
+
+	resolveElements()
+	normalizeOverlay()
+	if container then
+		container.Visible = false
+	end
+
+	local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+	PlayerStateRemote = Remotes:WaitForChild("PlayerStateChanged") :: RemoteEvent
+	RoundStateRemote = Remotes:WaitForChild("RoundStateChanged") :: RemoteEvent
+
+	PlayerStateRemote.OnClientEvent:Connect(function(player: Player, state: string)
+		if player ~= localPlayer then return end
+		localState = state
+		reconcileVisibility()
+	end)
+
+	RoundStateRemote.OnClientEvent:Connect(function(phase: string)
+		currentPhase = phase
+		reconcileVisibility()
+	end)
+end
+
+return AbilityHUDController

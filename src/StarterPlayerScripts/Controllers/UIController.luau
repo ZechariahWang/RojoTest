@@ -207,6 +207,21 @@ function UIController.init()
 		end
 	end)
 
+	-- Seed every connected player as Lobby up-front. The server's initial
+	-- PlayerStateChanged broadcast can fire before this listener attaches, so
+	-- without seeding, the local player wouldn't be counted in the lobby total.
+	for _, p in Players:GetPlayers() do
+		if playerStates[p] == nil then
+			playerStates[p] = Constants.STATE_LOBBY
+		end
+	end
+
+	Players.PlayerAdded:Connect(function(p)
+		if playerStates[p] == nil then
+			playerStates[p] = Constants.STATE_LOBBY
+		end
+	end)
+
 	PlayerStateRemote.OnClientEvent:Connect(function(player: Player, state: string)
 		playerStates[player] = state
 	end)

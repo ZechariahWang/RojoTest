@@ -119,7 +119,7 @@ function AbilityHUDController.setActiveAbility(abilityId: string?)
 		return
 	end
 
-	local ability = Abilities[abilityId]
+	local ability = Abilities.get(abilityId)
 	if not ability then
 		container.Visible = false
 		return
@@ -131,7 +131,7 @@ function AbilityHUDController.setActiveAbility(abilityId: string?)
 end
 
 function AbilityHUDController.triggerCooldown(abilityId: string)
-	local ability = Abilities[abilityId]
+	local ability = Abilities.get(abilityId)
 	if not ability then return end
 
 	resolveElements()
@@ -166,13 +166,30 @@ function AbilityHUDController.triggerCooldown(abilityId: string)
 	tween:Play()
 end
 
+local function isInGame(): boolean
+	if currentPhase ~= Constants.PHASE_ROUND then return false end
+	return localState == Constants.STATE_SAFE or localState == Constants.STATE_BURNING
+end
+
+local function resolveAbilityForRole(): Abilities.AbilityDef?
+	local category = Abilities.categoryForState(localState)
+	if not category then return nil end
+	return Abilities.primaryFor(category)
+end
+
 local function reconcileVisibility()
-	local canUse = (localState == Constants.STATE_SAFE) and (currentPhase == Constants.PHASE_ROUND)
-	if canUse then
-		AbilityHUDController.setActiveAbility("Dash")
-	else
+	if not isInGame() then
 		AbilityHUDController.setActiveAbility(nil)
+		return
 	end
+
+	local ability = resolveAbilityForRole()
+	if not ability then
+		AbilityHUDController.setActiveAbility(nil)
+		return
+	end
+
+	AbilityHUDController.setActiveAbility(ability.id)
 end
 
 function AbilityHUDController.init()
